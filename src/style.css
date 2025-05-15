@@ -112,7 +112,7 @@ button:focus-visible {
 #joystick-base {
   position: fixed;
   left: 40px;
-  bottom: 40px;
+  bottom: 160px; /* Increased to avoid overlap with imageControlsUI */
   width: 120px;
   height: 120px;
   background: rgba(100, 100, 100, 0.2);
@@ -143,4 +143,43 @@ button:focus-visible {
   z-index: 9;
   touch-action: none;
   background: transparent;
+}
+
+#takePhotoBtn, #selectGalleryBtn, #captureBtn {
+  margin: 0 8px 8px 0;
+  font-size: 1em;
+}
+#cameraPreview, #imagePreview {
+  margin-top: 10px;
+  border: 1px solid #ccc;
+  background: #222;
+  max-width: 90vw;
+  max-height: 40vh;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+#imageControlsUI {
+  text-align: center;
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  background: rgba(40,40,40,0.8);
+  padding: 10px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  max-width: 340px;
+  width: 90vw;
+}
+#initialButtons, #cameraModeUI, #previewModeUI {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
 }

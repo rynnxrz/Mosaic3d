@@ -14,9 +14,22 @@
       <div id="joystick-handle"></div>
     </div>
     <div id="look-area"></div>
-    <div style="text-align:center; margin-bottom:20px;">
-      <button id="btn1">Button 1</button>
-      <button id="btn2">Button 2</button>
+    <div id="imageControlsUI">
+      <div id="initialButtons">
+        <button id="takePhotoBtn">Take Photo</button>
+        <button id="selectGalleryBtn">Select from Gallery</button>
+        <input type="file" id="galleryInput" accept="image/*" style="display: none;">
+      </div>
+      <div id="cameraModeUI" style="display:none;">
+        <video id="cameraPreview" autoplay playsinline style="display:none; width: 320px; height: 240px; border:1px solid #555; margin-top:10px;"></video>
+        <button id="captureBtn" style="margin-top:5px;">Capture Photo</button>
+        <button id="cancelCameraBtn" style="margin-top:5px;">Cancel</button>
+      </div>
+      <div id="previewModeUI" style="display:none;">
+        <img id="imagePreview" style="display:none; max-width: 320px; max-height: 240px; border:1px solid #555; margin-top:10px;">
+        <button id="pinPhotoBtn" disabled style="margin-top:5px;">Pin Photo</button>
+        <button id="retakeBtn" style="margin-top:5px;">Retake/Choose New</button>
+      </div>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>

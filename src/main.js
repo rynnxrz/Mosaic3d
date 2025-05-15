@@ -34,7 +34,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // --- Three.js 3D Scene Setup ---
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(
-    75,
+    60,
     window.innerWidth / (window.innerHeight * 0.8),
     0.1,
     1000
@@ -229,4 +229,133 @@ window.addEventListener('DOMContentLoaded', () => {
         });
     });
   }
+
+  // --- Photo & Gallery UI Logic (Refactored for new structure) ---
+  let processedImageBlob = null;
+  const imageControlsUI = document.getElementById('imageControlsUI');
+  const initialButtons = document.getElementById('initialButtons');
+  const cameraModeUI = document.getElementById('cameraModeUI');
+  const previewModeUI = document.getElementById('previewModeUI');
+  const takePhotoBtn = document.getElementById('takePhotoBtn');
+  const selectGalleryBtn = document.getElementById('selectGalleryBtn');
+  const galleryInput = document.getElementById('galleryInput');
+  const cameraPreview = document.getElementById('cameraPreview');
+  const captureBtn = document.getElementById('captureBtn');
+  const cancelCameraBtn = document.getElementById('cancelCameraBtn');
+  const imagePreview = document.getElementById('imagePreview');
+  const pinPhotoBtn = document.getElementById('pinPhotoBtn');
+  const retakeBtn = document.getElementById('retakeBtn');
+  let cameraStream = null;
+
+  function showInitialButtons() {
+    initialButtons.style.display = 'flex';
+    cameraModeUI.style.display = 'none';
+    previewModeUI.style.display = 'none';
+    cameraPreview.style.display = 'none';
+    imagePreview.style.display = 'none';
+    pinPhotoBtn.disabled = true;
+  }
+  function showCameraMode() {
+    initialButtons.style.display = 'none';
+    cameraModeUI.style.display = 'flex';
+    previewModeUI.style.display = 'none';
+    cameraPreview.style.display = 'block';
+    imagePreview.style.display = 'none';
+    pinPhotoBtn.disabled = true;
+  }
+  function showPreviewMode() {
+    initialButtons.style.display = 'none';
+    cameraModeUI.style.display = 'none';
+    previewModeUI.style.display = 'flex';
+    cameraPreview.style.display = 'none';
+    imagePreview.style.display = 'block';
+    pinPhotoBtn.disabled = false;
+  }
+
+  // Take Photo button
+  takePhotoBtn.addEventListener('click', async () => {
+    if (window.isSecureContext !== true) {
+      alert('Camera access requires HTTPS.');
+      return;
+    }
+    try {
+      cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      cameraPreview.srcObject = cameraStream;
+      showCameraMode();
+    } catch (err) {
+      alert('Camera access denied or unavailable.');
+      showInitialButtons();
+    }
+  });
+
+  // Cancel Camera button
+  cancelCameraBtn.addEventListener('click', () => {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(track => track.stop());
+      cameraStream = null;
+    }
+    showInitialButtons();
+  });
+
+  // Capture button
+  captureBtn.addEventListener('click', () => {
+    if (!cameraPreview.srcObject) return;
+    const video = cameraPreview;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(blob => {
+      processedImageBlob = blob;
+      imagePreview.src = URL.createObjectURL(blob);
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        cameraStream = null;
+      }
+      showPreviewMode();
+    }, 'image/jpeg', 0.8);
+  });
+
+  // Select from Gallery button
+  selectGalleryBtn.addEventListener('click', () => {
+    galleryInput.value = '';
+    galleryInput.click();
+  });
+
+  // Gallery input change
+  galleryInput.addEventListener('change', e => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const img = new window.Image();
+    img.onload = function() {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(blob => {
+        processedImageBlob = blob;
+        imagePreview.src = URL.createObjectURL(blob);
+        showPreviewMode();
+      }, 'image/jpeg', 0.8);
+    };
+    img.src = URL.createObjectURL(file);
+  });
+
+  // Retake/Choose New button
+  retakeBtn.addEventListener('click', () => {
+    processedImageBlob = null;
+    imagePreview.src = '';
+    showInitialButtons();
+  });
+
+  // Pin Photo button (placeholder, stays disabled)
+  pinPhotoBtn.addEventListener('click', () => {
+    // Implement pinning logic here
+    alert('Pinning not implemented yet.');
+  });
+
+  // Initialize UI state
+  showInitialButtons();
 });
