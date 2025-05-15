@@ -8,27 +8,29 @@
     <link rel="manifest" href="/manifest.json" />
   </head>
   <body>
-    <div id="app"></div>
-    <div id="canvas-container" style="width:100vw; height:80vh; margin:0 auto; position:relative;"></div>
-    <div id="joystick-base">
-      <div id="joystick-handle"></div>
-    </div>
+    <div id="canvas-container"></div>
+    <div id="joystick-base"><div id="joystick-handle"></div></div>
     <div id="look-area"></div>
-    <div id="imageControlsUI">
-      <div id="initialButtons">
-        <button id="takePhotoBtn">Take Photo</button>
-        <button id="selectGalleryBtn">Select from Gallery</button>
+    <button id="addContentBtn">+</button>
+    <div id="contentPanel">
+      <div id="contentTypeSelectView" class="view active">
+        <button id="selectPhotoTypeBtn">Photo</button>
+        <button id="selectTextTypeBtn">Text</button>
+      </div>
+      <div id="cameraModeView" class="view">
+        <video id="cameraPreview" autoplay playsinline style="width: 320px; height: 240px; border:1px solid #555; background:#111;"></video>
         <input type="file" id="galleryInput" accept="image/*" style="display: none;">
+        <div class="camera-control-row">
+          <button id="galleryFromCamBtn" class="camera-control-icon-btn">🖼️</button>
+          <button id="captureFromCamBtn">○</button>
+          <button id="flipCameraBtn" class="camera-control-icon-btn">⇄</button>
+        </div>
+        <button id="backToTypesBtn">Back</button>
       </div>
-      <div id="cameraModeUI" style="display:none;">
-        <video id="cameraPreview" autoplay playsinline style="display:none; width: 320px; height: 240px; border:1px solid #555; margin-top:10px;"></video>
-        <button id="captureBtn" style="margin-top:5px;">Capture Photo</button>
-        <button id="cancelCameraBtn" style="margin-top:5px;">Cancel</button>
-      </div>
-      <div id="previewModeUI" style="display:none;">
-        <img id="imagePreview" style="display:none; max-width: 320px; max-height: 240px; border:1px solid #555; margin-top:10px;">
-        <button id="pinPhotoBtn" disabled style="margin-top:5px;">Pin Photo</button>
-        <button id="retakeBtn" style="margin-top:5px;">Retake/Choose New</button>
+      <div id="imagePreviewView" class="view">
+        <img id="imagePreview" style="max-width: 320px; max-height: 240px; border:1px solid #555; background:#111;">
+        <button id="pinPhotoBtn" disabled>Pin Photo</button>
+        <button id="chooseDifferentBtn">Choose Different</button>
       </div>
     </div>
     <script type="module" src="/src/main.js"></script>

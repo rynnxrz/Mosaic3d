@@ -2,11 +2,33 @@ import './style.css'
 import * as THREE from 'three';
 
 window.addEventListener('DOMContentLoaded', () => {
-  // Get DOM elements
-  const canvasContainer = document.getElementById('canvas-container');
-  const joystickBase = document.getElementById('joystick-base');
-  const joystickHandle = document.getElementById('joystick-handle');
-  const lookArea = document.getElementById('look-area');
+  // --- UI Element Lookups with Null Checks ---
+  function getEl(id) {
+    const el = document.getElementById(id);
+    if (!el) console.error(`Element with id='${id}' not found!`);
+    return el;
+  }
+  const canvasContainer = getEl('canvas-container');
+  const joystickBase = getEl('joystick-base');
+  const joystickHandle = getEl('joystick-handle');
+  const lookArea = getEl('look-area');
+  const addContentBtn = getEl('addContentBtn');
+  const contentPanel = getEl('contentPanel');
+  const contentTypeSelectView = getEl('contentTypeSelectView');
+  const cameraModeView = getEl('cameraModeView');
+  const imagePreviewView = getEl('imagePreviewView');
+  const selectPhotoTypeBtn = getEl('selectPhotoTypeBtn');
+  const selectTextTypeBtn = getEl('selectTextTypeBtn');
+  const closePanelBtn = getEl('closePanelBtn');
+  const cameraPreview = getEl('cameraPreview');
+  const galleryInput = getEl('galleryInput');
+  const galleryFromCamBtn = getEl('galleryFromCamBtn');
+  const captureFromCamBtn = getEl('captureFromCamBtn');
+  const flipCameraBtn = getEl('flipCameraBtn');
+  const backToTypesBtn = getEl('backToTypesBtn');
+  const imagePreview = getEl('imagePreview');
+  const pinPhotoBtn = getEl('pinPhotoBtn');
+  const chooseDifferentBtn = getEl('chooseDifferentBtn');
 
   if (!canvasContainer) {
     console.error('Error: #canvas-container not found in DOM.');
@@ -26,7 +48,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- Configurable Sensitivity ---
-  const MOVE_SENSITIVITY = 0.2; // Movement speed multiplier
+  const MOVE_SENSITIVITY = 0.05; // Slower movement
   const LOOK_SENSITIVITY = 0.15; // Look speed multiplier
   const CAMERA_HEIGHT = 5.5; // Camera Y position (eye level)
   const CAMERA_COLLISION_RADIUS = 2.5; // Camera collision radius
@@ -182,7 +204,7 @@ window.addEventListener('DOMContentLoaded', () => {
     // --- Movement ---
     let move = new THREE.Vector3();
     move.addScaledVector(forward, -joystickDelta.y * MOVE_SENSITIVITY);
-    move.addScaledVector(right, -joystickDelta.x * MOVE_SENSITIVITY); // Notice the minus sign
+    move.addScaledVector(right, -joystickDelta.x * MOVE_SENSITIVITY);
     // Try to move, check collision
     const newPos = camera.position.clone().add(move);
     newPos.y = CAMERA_HEIGHT;
@@ -211,7 +233,7 @@ window.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('resize', resizeRenderer);
   function resizeRenderer() {
     const width = window.innerWidth;
-    const height = window.innerHeight * 0.8;
+    const height = window.innerHeight; // Fullscreen
     renderer.setSize(width, height);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
@@ -230,75 +252,125 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // --- Photo & Gallery UI Logic (Refactored for new structure) ---
+  // --- New Add Content Panel UI Logic ---
   let processedImageBlob = null;
-  const imageControlsUI = document.getElementById('imageControlsUI');
-  const initialButtons = document.getElementById('initialButtons');
-  const cameraModeUI = document.getElementById('cameraModeUI');
-  const previewModeUI = document.getElementById('previewModeUI');
-  const takePhotoBtn = document.getElementById('takePhotoBtn');
-  const selectGalleryBtn = document.getElementById('selectGalleryBtn');
-  const galleryInput = document.getElementById('galleryInput');
-  const cameraPreview = document.getElementById('cameraPreview');
-  const captureBtn = document.getElementById('captureBtn');
-  const cancelCameraBtn = document.getElementById('cancelCameraBtn');
-  const imagePreview = document.getElementById('imagePreview');
-  const pinPhotoBtn = document.getElementById('pinPhotoBtn');
-  const retakeBtn = document.getElementById('retakeBtn');
   let cameraStream = null;
+  let cameraFacingMode = 'environment';
 
-  function showInitialButtons() {
-    initialButtons.style.display = 'flex';
-    cameraModeUI.style.display = 'none';
-    previewModeUI.style.display = 'none';
-    cameraPreview.style.display = 'none';
-    imagePreview.style.display = 'none';
-    pinPhotoBtn.disabled = true;
-  }
-  function showCameraMode() {
-    initialButtons.style.display = 'none';
-    cameraModeUI.style.display = 'flex';
-    previewModeUI.style.display = 'none';
-    cameraPreview.style.display = 'block';
-    imagePreview.style.display = 'none';
-    pinPhotoBtn.disabled = true;
-  }
-  function showPreviewMode() {
-    initialButtons.style.display = 'none';
-    cameraModeUI.style.display = 'none';
-    previewModeUI.style.display = 'flex';
-    cameraPreview.style.display = 'none';
-    imagePreview.style.display = 'block';
-    pinPhotoBtn.disabled = false;
-  }
-
-  // Take Photo button
-  takePhotoBtn.addEventListener('click', async () => {
-    if (window.isSecureContext !== true) {
-      alert('Camera access requires HTTPS.');
-      return;
+  // Helper: show only one view in the panel
+  function showPanelView(viewId) {
+    [contentTypeSelectView, cameraModeView, imagePreviewView].forEach(v => v && v.classList.remove('active'));
+    const view = getEl(viewId);
+    if (view) view.classList.add('active');
+    // Fullscreen for camera or preview
+    if (contentPanel) {
+      if (viewId === 'cameraModeView' || viewId === 'imagePreviewView') {
+        contentPanel.classList.add('fullscreen-panel');
+      } else {
+        contentPanel.classList.remove('fullscreen-panel');
+      }
     }
-    try {
-      cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
-      cameraPreview.srcObject = cameraStream;
-      showCameraMode();
-    } catch (err) {
-      alert('Camera access denied or unavailable.');
-      showInitialButtons();
+  }
+  function openPanel() {
+    if (contentPanel) contentPanel.classList.add('panel-active');
+    if (addContentBtn) {
+      addContentBtn.classList.add('is-close-icon');
+      addContentBtn.textContent = '\u00D7';
     }
-  });
-
-  // Cancel Camera button
-  cancelCameraBtn.addEventListener('click', () => {
+    showPanelView('contentTypeSelectView');
+  }
+  function closePanel() {
+    if (contentPanel) {
+      contentPanel.classList.remove('panel-active');
+      contentPanel.classList.remove('fullscreen-panel');
+    }
+    if (addContentBtn) {
+      addContentBtn.classList.remove('is-close-icon');
+      addContentBtn.textContent = '+';
+    }
+    showPanelView('contentTypeSelectView');
+    stopCamera();
+    processedImageBlob = null;
+    imagePreview.src = '';
+  }
+  function stopCamera() {
     if (cameraStream) {
       cameraStream.getTracks().forEach(track => track.stop());
       cameraStream = null;
     }
-    showInitialButtons();
-  });
+    cameraPreview.srcObject = null;
+  }
 
-  // Capture button
-  captureBtn.addEventListener('click', () => {
+  // + button toggles panel
+  if (addContentBtn) {
+    addContentBtn.addEventListener('click', () => {
+      if (contentPanel && contentPanel.classList.contains('panel-active')) {
+        closePanel();
+      } else {
+        openPanel();
+      }
+    });
+  }
+  if (closePanelBtn) closePanelBtn.addEventListener('click', closePanel);
+
+  // Photo type
+  if (selectPhotoTypeBtn) selectPhotoTypeBtn.addEventListener('click', async () => {
+    showPanelView('cameraModeView');
+    try {
+      cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: cameraFacingMode } });
+      cameraPreview.srcObject = cameraStream;
+    } catch (err) {
+      alert('Camera access denied or unavailable.');
+      showPanelView('contentTypeSelectView');
+    }
+  });
+  // Text type (future)
+  if (selectTextTypeBtn) selectTextTypeBtn.addEventListener('click', () => {
+    console.log('Text mode selected (not implemented)');
+    alert('Text mode not implemented yet.');
+  });
+  // Back to type select
+  if (backToTypesBtn) backToTypesBtn.addEventListener('click', () => {
+    stopCamera();
+    showPanelView('contentTypeSelectView');
+  });
+  // Flip camera
+  if (flipCameraBtn) flipCameraBtn.addEventListener('click', () => {
+    // TODO: Implement camera facingMode toggle
+    cameraFacingMode = (cameraFacingMode === 'environment') ? 'user' : 'environment';
+    stopCamera();
+    // Re-init camera with new facingMode
+    selectPhotoTypeBtn.click();
+  });
+  // Gallery from camera mode
+  if (galleryFromCamBtn) galleryFromCamBtn.addEventListener('click', () => {
+    galleryInput.value = '';
+    galleryInput.click();
+  });
+  // Gallery input change
+  if (galleryInput) {
+    galleryInput.addEventListener('change', e => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const img = new window.Image();
+      img.onload = function() {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(blob => {
+          processedImageBlob = blob;
+          imagePreview.src = URL.createObjectURL(blob);
+          showPanelView('imagePreviewView');
+          stopCamera();
+        }, 'image/jpeg', 0.8);
+      };
+      img.src = URL.createObjectURL(file);
+    });
+  }
+  // Capture from camera
+  if (captureFromCamBtn) captureFromCamBtn.addEventListener('click', () => {
     if (!cameraPreview.srcObject) return;
     const video = cameraPreview;
     const canvas = document.createElement('canvas');
@@ -309,53 +381,29 @@ window.addEventListener('DOMContentLoaded', () => {
     canvas.toBlob(blob => {
       processedImageBlob = blob;
       imagePreview.src = URL.createObjectURL(blob);
-      if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-        cameraStream = null;
-      }
-      showPreviewMode();
+      showPanelView('imagePreviewView');
+      stopCamera();
     }, 'image/jpeg', 0.8);
   });
-
-  // Select from Gallery button
-  selectGalleryBtn.addEventListener('click', () => {
-    galleryInput.value = '';
-    galleryInput.click();
-  });
-
-  // Gallery input change
-  galleryInput.addEventListener('change', e => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    const img = new window.Image();
-    img.onload = function() {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob(blob => {
-        processedImageBlob = blob;
-        imagePreview.src = URL.createObjectURL(blob);
-        showPreviewMode();
-      }, 'image/jpeg', 0.8);
-    };
-    img.src = URL.createObjectURL(file);
-  });
-
-  // Retake/Choose New button
-  retakeBtn.addEventListener('click', () => {
-    processedImageBlob = null;
-    imagePreview.src = '';
-    showInitialButtons();
-  });
-
-  // Pin Photo button (placeholder, stays disabled)
-  pinPhotoBtn.addEventListener('click', () => {
-    // Implement pinning logic here
+  // Pin photo (placeholder)
+  if (pinPhotoBtn) pinPhotoBtn.addEventListener('click', () => {
     alert('Pinning not implemented yet.');
   });
+  // Choose different
+  if (chooseDifferentBtn) chooseDifferentBtn.addEventListener('click', () => {
+    processedImageBlob = null;
+    imagePreview.src = '';
+    showPanelView('contentTypeSelectView');
+  });
 
-  // Initialize UI state
-  showInitialButtons();
+  // Initialize panel state
+  closePanel();
+
+  // Joystick handle reset on touchend (ensure centering)
+  if (joystickBase && joystickHandle) {
+    joystickBase.addEventListener('touchend', e => {
+      joystickDelta = { x: 0, y: 0 };
+      joystickHandle.style.transform = 'translate(-50%, -50%)';
+    });
+  }
 });
