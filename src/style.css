@@ -309,7 +309,7 @@ button:focus-visible {
   display: none;
   flex-direction: column;
   align-items: center;
-  gap: 15px;
+  gap: 20px;
   width: 100%;
 }
 .view.active {
@@ -336,7 +336,9 @@ button:focus-visible {
   cursor: not-allowed;
 }
 #closePanelBtn, #backToTypesBtn {
-  background: rgba(90, 90, 90, 0.7);
+  /* #closePanelBtn, #backToTypesBtn {
+    background: rgba(90, 90, 90, 0.7);
+  } */
 }
 
 .camera-control-row {

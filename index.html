@@ -6,10 +6,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vite App</title>
     <link rel="manifest" href="/manifest.json" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <script>
+      // TEST SCRIPT 1: Runs very early
+      document.addEventListener('DOMContentLoaded', function() {
+        console.log('[Inline Script] DOMContentLoaded fired.');
+        const canvasContainerTest = document.getElementById('canvas-container');
+        console.log('[Inline Script] canvas-container from DOMContentLoaded:', canvasContainerTest);
+      });
+
+      // TEST SCRIPT 2: Attempts to run as HTML is parsed (might be too early for elements below)
+      // We'll add another test later if needed, but let's see what the DOMContentLoaded above does.
+    </script>
   </head>
   <body>
     <div id="canvas-container"></div>
-    <div id="joystick-base"><div id="joystick-handle"></div></div>
+    <div id="joystick-container">
+      <div id="joystick-base"><div id="joystick-handle"></div></div>
+    </div>
     <div id="look-area"></div>
     <button id="addContentBtn">+</button>
     <div id="contentPanel">

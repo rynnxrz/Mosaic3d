@@ -2,9 +2,12 @@ import './style.css'
 import * as THREE from 'three';
 
 window.addEventListener('DOMContentLoaded', () => {
+  console.log('DOM fully loaded and parsed');
+  console.log('Direct getElementById("canvas-container"):', document.getElementById('canvas-container'));
   // --- UI Element Lookups with Null Checks ---
   function getEl(id) {
     const el = document.getElementById(id);
+    console.log(`getEl called for id='${id}', found:`, el);
     if (!el) console.error(`Element with id='${id}' not found!`);
     return el;
   }
@@ -19,7 +22,6 @@ window.addEventListener('DOMContentLoaded', () => {
   const imagePreviewView = getEl('imagePreviewView');
   const selectPhotoTypeBtn = getEl('selectPhotoTypeBtn');
   const selectTextTypeBtn = getEl('selectTextTypeBtn');
-  const closePanelBtn = getEl('closePanelBtn');
   const cameraPreview = getEl('cameraPreview');
   const galleryInput = getEl('galleryInput');
   const galleryFromCamBtn = getEl('galleryFromCamBtn');
@@ -256,6 +258,11 @@ window.addEventListener('DOMContentLoaded', () => {
   let processedImageBlob = null;
   let cameraStream = null;
   let cameraFacingMode = 'environment';
+  let pinningMode = false;
+  let tempPreviewPlane = null;
+  let pinnedPhotoCounter = 0;
+  let selectedPinningPosition = null;
+  let confirmPinButton = null;
 
   // Helper: show only one view in the panel
   function showPanelView(viewId) {
@@ -275,7 +282,7 @@ window.addEventListener('DOMContentLoaded', () => {
     if (contentPanel) contentPanel.classList.add('panel-active');
     if (addContentBtn) {
       addContentBtn.classList.add('is-close-icon');
-      addContentBtn.textContent = '\u00D7';
+      addContentBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
     }
     showPanelView('contentTypeSelectView');
   }
@@ -286,7 +293,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     if (addContentBtn) {
       addContentBtn.classList.remove('is-close-icon');
-      addContentBtn.textContent = '+';
+      addContentBtn.innerHTML = '<span class="material-symbols-outlined">add</span>';
     }
     showPanelView('contentTypeSelectView');
     stopCamera();
@@ -301,17 +308,306 @@ window.addEventListener('DOMContentLoaded', () => {
     cameraPreview.srcObject = null;
   }
 
-  // + button toggles panel
-  if (addContentBtn) {
-    addContentBtn.addEventListener('click', () => {
-      if (contentPanel && contentPanel.classList.contains('panel-active')) {
-        closePanel();
-      } else {
-        openPanel();
-      }
-    });
+  // Helper function to enable/disable the Pin Photo button based on image availability
+  function updatePinButtonState() {
+    if (pinPhotoBtn) {
+      pinPhotoBtn.disabled = !processedImageBlob;
+    }
   }
-  if (closePanelBtn) closePanelBtn.addEventListener('click', closePanel);
+
+  // Raycast helper function
+  function createRaycastFromEvent(event) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    const pointer = new THREE.Vector2(x, y);
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(pointer, camera);
+    return raycaster;
+  }
+
+  // Create a photo plane at the raycast intersection point
+  function createPhotoPlane(intersection) {
+    // Get the image aspect ratio to create a properly sized plane
+    const img = new Image();
+    img.src = URL.createObjectURL(processedImageBlob);
+    
+    const onImageLoad = () => {
+      const aspectRatio = img.width / img.height;
+      const planeWidth = 5;
+      const planeHeight = planeWidth / aspectRatio;
+      
+      // Create geometry with the correct aspect ratio
+      const planeGeo = new THREE.PlaneGeometry(planeWidth, planeHeight);
+      
+      // Create texture from the blob
+      const texture = new THREE.TextureLoader().load(img.src);
+      // Use MeshBasicMaterial for correct brightness, ignoring scene lighting
+      const planeMat = new THREE.MeshBasicMaterial({
+        map: texture,
+        side: THREE.DoubleSide,
+        transparent: true
+      });
+      // Slightly tone down the brightness if needed
+      planeMat.color.multiplyScalar(0.9);
+      
+      // Create and position the photo mesh
+      const pinnedPhotoMesh = new THREE.Mesh(planeGeo, planeMat);
+      
+      // Position at intersection point
+      pinnedPhotoMesh.position.copy(intersection.point);
+      
+      // Orient the mesh based on the surface normal
+      if (Math.abs(intersection.face.normal.y) > 0.95) {
+        // STEP 1: Make it lie flat (absolute orientation)
+        // This makes the plane's normal align with world Y-axis
+        pinnedPhotoMesh.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0, 'YXZ'));
+        
+        // STEP 2: Rotate around world Y-axis to align with camera's horizontal view
+        // Get camera direction projected onto XZ plane (horizontal plane)
+        const cameraDirection = new THREE.Vector3();
+        camera.getWorldDirection(cameraDirection);
+        cameraDirection.y = 0; // Ignore vertical component
+        cameraDirection.normalize();
+        
+        // Calculate Y rotation to align with camera's horizontal direction
+        const alignWithCameraY = Math.atan2(cameraDirection.x, cameraDirection.z);
+        
+        // Apply Y rotation to the already flattened plane
+        // Create a rotation quaternion around world Y axis
+        const yRotationQuat = new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(0, 1, 0), 
+          alignWithCameraY
+        );
+        
+        // Apply the Y rotation after flattening
+        pinnedPhotoMesh.quaternion.multiply(yRotationQuat);
+      } else {
+        // For walls and angled surfaces
+        pinnedPhotoMesh.lookAt(
+          intersection.point.clone().add(intersection.face.normal.clone().multiplyScalar(1.1))
+        );
+      }
+      
+      // Apply offset after orientation to prevent z-fighting
+      pinnedPhotoMesh.position.addScaledVector(intersection.face.normal, 0.01);
+      
+      // Store metadata
+      pinnedPhotoMesh.userData = {
+        imageId: `photo_${Date.now()}_${pinnedPhotoCounter++}`,
+        timestamp: Date.now(),
+        position: {
+          x: pinnedPhotoMesh.position.x,
+          y: pinnedPhotoMesh.position.y,
+          z: pinnedPhotoMesh.position.z
+        },
+        orientation: {
+          x: pinnedPhotoMesh.quaternion.x,
+          y: pinnedPhotoMesh.quaternion.y,
+          z: pinnedPhotoMesh.quaternion.z,
+          w: pinnedPhotoMesh.quaternion.w
+        },
+        scale: {
+          x: pinnedPhotoMesh.scale.x,
+          y: pinnedPhotoMesh.scale.y,
+          z: pinnedPhotoMesh.scale.z
+        }
+      };
+      
+      // Add to scene
+      scene.add(pinnedPhotoMesh);
+      
+      // Clean up
+      URL.revokeObjectURL(img.src);
+    };
+    
+    img.onload = onImageLoad;
+  }
+
+  // Handle showing/hiding preview plane during pinning mode
+  function updatePreviewPlane(event) {
+    if (!pinningMode) return;
+    
+    const raycaster = createRaycastFromEvent(event);
+    const intersectableObjects = [ground, wall1, wall2, wall3];
+    const intersects = raycaster.intersectObjects(intersectableObjects);
+    
+    if (intersects.length > 0) {
+      const intersection = intersects[0];
+      
+      // Create preview plane if it doesn't exist
+      if (!tempPreviewPlane) {
+        const previewGeo = new THREE.PlaneGeometry(5, 3);
+        // Use MeshBasicMaterial for consistent visualization with the final pinned image
+        const previewMat = new THREE.MeshBasicMaterial({
+          color: 0x00ff00,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.5,
+          side: THREE.DoubleSide
+        });
+        tempPreviewPlane = new THREE.Mesh(previewGeo, previewMat);
+        scene.add(tempPreviewPlane);
+      }
+      
+      // Position the preview plane
+      tempPreviewPlane.position.copy(intersection.point);
+      
+      // Orient the preview plane - match createPhotoPlane exactly
+      if (Math.abs(intersection.face.normal.y) > 0.95) {
+        // STEP 1: Make it lie flat (absolute orientation)
+        // This makes the plane's normal align with world Y-axis
+        tempPreviewPlane.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0, 'YXZ'));
+        
+        // STEP 2: Rotate around world Y-axis to align with camera's horizontal view
+        // Get camera direction projected onto XZ plane (horizontal plane)
+        const cameraDirection = new THREE.Vector3();
+        camera.getWorldDirection(cameraDirection);
+        cameraDirection.y = 0; // Ignore vertical component
+        cameraDirection.normalize();
+        
+        // Calculate Y rotation to align with camera's horizontal direction
+        const alignWithCameraY = Math.atan2(cameraDirection.x, cameraDirection.z);
+        
+        // Apply Y rotation to the already flattened plane
+        // Create a rotation quaternion around world Y axis
+        const yRotationQuat = new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(0, 1, 0), 
+          alignWithCameraY
+        );
+        
+        // Apply the Y rotation after flattening
+        tempPreviewPlane.quaternion.multiply(yRotationQuat);
+      } else {
+        // For walls and angled surfaces
+        tempPreviewPlane.lookAt(
+          intersection.point.clone().add(intersection.face.normal.clone().multiplyScalar(1.1))
+        );
+      }
+      
+      // Add offset after orientation
+      tempPreviewPlane.position.addScaledVector(intersection.face.normal, 0.01);
+      tempPreviewPlane.visible = true;
+    } else if (tempPreviewPlane) {
+      tempPreviewPlane.visible = false;
+    }
+  }
+
+  // Create or get confirm pin button
+  function getConfirmPinButton() {
+    if (!confirmPinButton) {
+      confirmPinButton = document.createElement('button');
+      confirmPinButton.id = 'confirmPinBtn';
+      confirmPinButton.textContent = 'Confirm Pin';
+      confirmPinButton.style.position = 'fixed';
+      confirmPinButton.style.bottom = '100px';
+      confirmPinButton.style.left = '50%';
+      confirmPinButton.style.transform = 'translateX(-50%)';
+      confirmPinButton.style.background = 'rgba(0, 180, 0, 0.8)';
+      confirmPinButton.style.color = 'white';
+      confirmPinButton.style.padding = '12px 24px';
+      confirmPinButton.style.borderRadius = '24px';
+      confirmPinButton.style.border = 'none';
+      confirmPinButton.style.zIndex = '100';
+      confirmPinButton.style.display = 'none';
+      confirmPinButton.style.fontWeight = 'bold';
+      confirmPinButton.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
+      
+      document.body.appendChild(confirmPinButton);
+      
+      confirmPinButton.addEventListener('click', () => {
+        if (selectedPinningPosition) {
+          // Create permanent photo using selected position
+          createPhotoPlane(selectedPinningPosition);
+          
+          // Exit pinning mode
+          togglePinningMode(false);
+          
+          // Disable pin button until a new photo is selected
+          processedImageBlob = null;
+          updatePinButtonState();
+        }
+      });
+    }
+    
+    return confirmPinButton;
+  }
+
+  // Enter or exit pinning mode
+  function togglePinningMode(enter) {
+    pinningMode = enter;
+    selectedPinningPosition = null;
+    
+    if (enter) {
+      addContentBtn.innerHTML = '<span class="material-symbols-outlined">cancel</span>';
+      addContentBtn.setAttribute('data-mode', 'pinning');
+      
+      // Hide confirm button initially
+      const confirmBtn = getConfirmPinButton();
+      confirmBtn.style.display = 'none';
+      
+      // Optionally show a helper message
+      const helpMsg = document.createElement('div');
+      helpMsg.id = 'pinning-helper';
+      helpMsg.textContent = 'Tap on a surface to position your photo';
+      helpMsg.style.position = 'fixed';
+      helpMsg.style.top = '20px';
+      helpMsg.style.left = '50%';
+      helpMsg.style.transform = 'translateX(-50%)';
+      helpMsg.style.background = 'rgba(0,0,0,0.7)';
+      helpMsg.style.color = 'white';
+      helpMsg.style.padding = '10px 20px';
+      helpMsg.style.borderRadius = '20px';
+      helpMsg.style.zIndex = '100';
+      document.body.appendChild(helpMsg);
+    } else {
+      addContentBtn.innerHTML = '<span class="material-symbols-outlined">add</span>';
+      addContentBtn.removeAttribute('data-mode');
+      
+      // Hide confirm button when exiting pinning mode
+      if (confirmPinButton) {
+        confirmPinButton.style.display = 'none';
+      }
+      
+      // Remove the preview plane if it exists
+      if (tempPreviewPlane) {
+        scene.remove(tempPreviewPlane);
+        tempPreviewPlane.geometry.dispose();
+        tempPreviewPlane.material.dispose();
+        tempPreviewPlane = null;
+      }
+      
+      // Remove helper message if it exists
+      const helpMsg = document.getElementById('pinning-helper');
+      if (helpMsg) {
+        document.body.removeChild(helpMsg);
+      }
+    }
+  }
+
+  // Process raycast hit and select position for pin
+  function handlePinningClick(event) {
+    if (!pinningMode || !processedImageBlob) return;
+    
+    const raycaster = createRaycastFromEvent(event);
+    const intersectableObjects = [ground, wall1, wall2, wall3];
+    const intersects = raycaster.intersectObjects(intersectableObjects);
+    
+    if (intersects.length > 0) {
+      // Store the selected position for later use
+      selectedPinningPosition = intersects[0];
+      
+      // Update helper message
+      const helpMsg = document.getElementById('pinning-helper');
+      if (helpMsg) {
+        helpMsg.textContent = 'Position selected. Click "Confirm Pin" to place your photo.';
+      }
+      
+      // Show confirm button
+      const confirmBtn = getConfirmPinButton();
+      confirmBtn.style.display = 'block';
+    }
+  }
 
   // Photo type
   if (selectPhotoTypeBtn) selectPhotoTypeBtn.addEventListener('click', async () => {
@@ -364,6 +660,8 @@ window.addEventListener('DOMContentLoaded', () => {
           imagePreview.src = URL.createObjectURL(blob);
           showPanelView('imagePreviewView');
           stopCamera();
+          // Enable the pin button since we have an image
+          updatePinButtonState();
         }, 'image/jpeg', 0.8);
       };
       img.src = URL.createObjectURL(file);
@@ -383,21 +681,60 @@ window.addEventListener('DOMContentLoaded', () => {
       imagePreview.src = URL.createObjectURL(blob);
       showPanelView('imagePreviewView');
       stopCamera();
+      // Enable the pin button since we have an image
+      updatePinButtonState();
     }, 'image/jpeg', 0.8);
   });
-  // Pin photo (placeholder)
+  // Pin photo implementation
   if (pinPhotoBtn) pinPhotoBtn.addEventListener('click', () => {
-    alert('Pinning not implemented yet.');
+    if (!processedImageBlob) {
+      alert('Please capture or select an image first.');
+      return;
+    }
+    
+    // Enter pinning mode
+    togglePinningMode(true);
+    
+    // Hide the content panel
+    if (contentPanel) {
+      contentPanel.classList.remove('panel-active');
+      contentPanel.classList.remove('fullscreen-panel');
+    }
   });
   // Choose different
   if (chooseDifferentBtn) chooseDifferentBtn.addEventListener('click', () => {
     processedImageBlob = null;
     imagePreview.src = '';
     showPanelView('contentTypeSelectView');
+    // Disable pin button since we no longer have an image
+    updatePinButtonState();
   });
+
+  // Add content button can cancel pinning mode
+  if (addContentBtn) {
+    const originalClickHandler = addContentBtn.onclick;
+    addContentBtn.addEventListener('click', () => {
+      if (pinningMode) {
+        togglePinningMode(false);
+        return;
+      }
+      
+      if (contentPanel && contentPanel.classList.contains('panel-active')) {
+        closePanel();
+      } else {
+        openPanel();
+      }
+    });
+  }
+
+  // Add event listeners for pinning mode
+  renderer.domElement.addEventListener('click', handlePinningClick);
+  renderer.domElement.addEventListener('pointermove', updatePreviewPlane);
 
   // Initialize panel state
   closePanel();
+  // Initial pin button state
+  updatePinButtonState();
 
   // Joystick handle reset on touchend (ensure centering)
   if (joystickBase && joystickHandle) {
