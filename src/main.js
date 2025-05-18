@@ -1,5 +1,6 @@
 import './style.css'
 import * as THREE from 'three';
+import { initDB, savePinnedItem, loadPinnedItems } from './database.js';
 
 window.addEventListener('DOMContentLoaded', () => {
   console.log('DOM fully loaded and parsed');
@@ -50,8 +51,8 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- Configurable Sensitivity ---
-  const MOVE_SENSITIVITY = 0.05; // Slower movement
-  const LOOK_SENSITIVITY = 0.15; // Look speed multiplier
+  const MOVE_SENSITIVITY = 0.1; // Faster movement (was 0.05)
+  const LOOK_SENSITIVITY = 0.3; // Increased look speed multiplier (was 0.15)
   const CAMERA_HEIGHT = 5.5; // Camera Y position (eye level)
   const CAMERA_COLLISION_RADIUS = 2.5; // Camera collision radius
 
@@ -244,7 +245,9 @@ window.addEventListener('DOMContentLoaded', () => {
   // Register service worker for PWA (keep this outside DOMContentLoaded if needed)
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/service-worker.js')
+      navigator.serviceWorker.register(`${import.meta.env.BASE_URL}service-worker.js`, {
+        scope: import.meta.env.BASE_URL
+      })
         .then(reg => {
           console.log('Service worker registered.', reg);
         })
@@ -326,13 +329,31 @@ window.addEventListener('DOMContentLoaded', () => {
     return raycaster;
   }
 
-  // Create a photo plane at the raycast intersection point
-  function createPhotoPlane(intersection) {
-    // Get the image aspect ratio to create a properly sized plane
-    const img = new Image();
-    img.src = URL.createObjectURL(processedImageBlob);
+  // Initialize the IndexedDB database
+  initDB().then(() => {
+    console.log('Database initialized, loading saved photos...');
+    // Load pinned photos from database
+    loadPinnedItems(scene, recreatePhotoMeshFromDB);
+  }).catch(error => {
+    console.error('Failed to initialize database:', error);
+  });
+  
+  // Function to recreate a photo mesh from database data
+  function recreatePhotoMeshFromDB(imageBlob, metadata) {
+    if (!imageBlob) {
+      console.error(`Cannot recreate photo mesh: imageBlob is null for imageId: ${metadata.imageId}`);
+      return;
+    }
     
-    const onImageLoad = () => {
+    console.log(`Recreating photo mesh for imageId: ${metadata.imageId}, blob size: ${imageBlob.size} bytes`);
+    
+    const img = new Image();
+    const blobUrl = URL.createObjectURL(imageBlob);
+    img.src = blobUrl;
+    
+    img.onload = () => {
+      console.log(`Image loaded successfully for imageId: ${metadata.imageId}, dimensions: ${img.width}x${img.height}`);
+      
       const aspectRatio = img.width / img.height;
       const planeWidth = 5;
       const planeHeight = planeWidth / aspectRatio;
@@ -341,7 +362,113 @@ window.addEventListener('DOMContentLoaded', () => {
       const planeGeo = new THREE.PlaneGeometry(planeWidth, planeHeight);
       
       // Create texture from the blob
-      const texture = new THREE.TextureLoader().load(img.src);
+      const texture = new THREE.TextureLoader().load(blobUrl, 
+        // onLoad callback
+        () => console.log(`Texture loaded successfully for imageId: ${metadata.imageId}`),
+        // onProgress callback (not used)
+        undefined,
+        // onError callback
+        (error) => console.error(`Error loading texture for imageId: ${metadata.imageId}`, error)
+      );
+      
+      // Use MeshBasicMaterial for correct brightness, ignoring scene lighting
+      const planeMat = new THREE.MeshBasicMaterial({
+        map: texture,
+        side: THREE.DoubleSide,
+        transparent: true
+      });
+      // Slightly tone down the brightness if needed
+      planeMat.color.multiplyScalar(0.9);
+      
+      // Create and position the photo mesh
+      const pinnedPhotoMesh = new THREE.Mesh(planeGeo, planeMat);
+      
+      // Set position from metadata
+      pinnedPhotoMesh.position.set(
+        metadata.position.x,
+        metadata.position.y,
+        metadata.position.z
+      );
+      
+      // Set orientation from metadata
+      pinnedPhotoMesh.quaternion.set(
+        metadata.orientation.x,
+        metadata.orientation.y,
+        metadata.orientation.z,
+        metadata.orientation.w
+      );
+      
+      // Set scale from metadata
+      pinnedPhotoMesh.scale.set(
+        metadata.scale.x,
+        metadata.scale.y,
+        metadata.scale.z
+      );
+      
+      // Store metadata in the mesh for potential later use
+      pinnedPhotoMesh.userData = {
+        imageId: metadata.imageId,
+        timestamp: metadata.timestamp,
+        position: metadata.position,
+        orientation: metadata.orientation,
+        scale: metadata.scale
+      };
+      
+      // Add to scene
+      scene.add(pinnedPhotoMesh);
+      console.log(`Photo mesh added to scene for imageId: ${metadata.imageId}`);
+      
+      // Clean up blob URL
+      URL.revokeObjectURL(blobUrl);
+    };
+    
+    img.onerror = (error) => {
+      console.error(`Failed to load image from blob for imageId: ${metadata.imageId}`, error);
+      URL.revokeObjectURL(blobUrl);
+    };
+  }
+
+  // Update the existing createPhotoPlane function to save to DB
+  function createPhotoPlane(intersection) {
+    // Validation and logging
+    if (!processedImageBlob) {
+      console.error('Cannot create photo plane: processedImageBlob is null');
+      return;
+    }
+    
+    console.log(`Creating photo plane with image blob, size: ${processedImageBlob.size} bytes, type: ${processedImageBlob.type}`);
+    
+    // Create a local copy of the blob to prevent issues with global state changes
+    const localImageBlob = processedImageBlob.slice(0, processedImageBlob.size, processedImageBlob.type);
+    console.log('Created local copy of blob in createPhotoPlane:', localImageBlob);
+    
+    // Get the image aspect ratio to create a properly sized plane
+    const img = new Image();
+    const blobUrl = URL.createObjectURL(localImageBlob);
+    img.src = blobUrl;
+    
+    const onImageLoad = () => {
+      console.log(`Image loaded successfully, dimensions: ${img.width}x${img.height}`);
+      console.log('Inside onImageLoad, global processedImageBlob is:', processedImageBlob);
+      console.log('Inside onImageLoad, using local copy localImageBlob:', localImageBlob);
+      
+      const aspectRatio = img.width / img.height;
+      const planeWidth = 5;
+      const planeHeight = planeWidth / aspectRatio;
+      
+      // Create geometry with the correct aspect ratio
+      const planeGeo = new THREE.PlaneGeometry(planeWidth, planeHeight);
+      
+      // Create texture from the blob
+      const texture = new THREE.TextureLoader().load(blobUrl, 
+        // onLoad callback
+        () => console.log('Texture loaded successfully'),
+        // onProgress callback (not used)
+        undefined,
+        // onError callback
+        (error) => console.error('Error loading texture:', error)
+      );
+      
       // Use MeshBasicMaterial for correct brightness, ignoring scene lighting
       const planeMat = new THREE.MeshBasicMaterial({
         map: texture,
@@ -392,9 +519,13 @@ window.addEventListener('DOMContentLoaded', () => {
       // Apply offset after orientation to prevent z-fighting
       pinnedPhotoMesh.position.addScaledVector(intersection.face.normal, 0.01);
       
+      // Generate a unique image ID
+      const imageId = `photo_${Date.now()}_${pinnedPhotoCounter++}`;
+      console.log(`Generated imageId: ${imageId}`);
+      
       // Store metadata
       pinnedPhotoMesh.userData = {
-        imageId: `photo_${Date.now()}_${pinnedPhotoCounter++}`,
+        imageId: imageId,
         timestamp: Date.now(),
         position: {
           x: pinnedPhotoMesh.position.x,
@@ -416,12 +547,39 @@ window.addEventListener('DOMContentLoaded', () => {
       
       // Add to scene
       scene.add(pinnedPhotoMesh);
+      console.log('Photo mesh added to scene');
+      
+      // Use the local copy we created earlier instead of the potentially cleared global variable
+      // This ensures we have a valid blob even if processedImageBlob has been cleared
+      console.log('Inside onImageLoad, using localImageBlob:', localImageBlob);
+      const imageBlob = localImageBlob.slice(0, localImageBlob.size, localImageBlob.type);
+      console.log('Created database-ready imageBlob:', imageBlob);
+      
+      // Save to database
+      savePinnedItem(
+        imageBlob, 
+        imageId, 
+        {
+          position: pinnedPhotoMesh.userData.position,
+          orientation: pinnedPhotoMesh.userData.orientation,
+          scale: pinnedPhotoMesh.userData.scale
+        }
+      ).then(() => {
+        console.log(`Photo saved to database successfully with imageId: ${imageId}`);
+      }).catch(error => {
+        console.error(`Failed to save photo to database with imageId: ${imageId}`, error);
+      });
       
       // Clean up
-      URL.revokeObjectURL(img.src);
+      URL.revokeObjectURL(blobUrl);
     };
     
     img.onload = onImageLoad;
+    
+    img.onerror = (error) => {
+      console.error('Failed to load image from blob:', error);
+      URL.revokeObjectURL(blobUrl);
+    };
   }
 
   // Handle showing/hiding preview plane during pinning mode
@@ -517,13 +675,19 @@ window.addEventListener('DOMContentLoaded', () => {
       
       confirmPinButton.addEventListener('click', () => {
         if (selectedPinningPosition) {
+          console.log('Confirm button clicked, before createPhotoPlane processedImageBlob is:', processedImageBlob);
+          
           // Create permanent photo using selected position
           createPhotoPlane(selectedPinningPosition);
           
           // Exit pinning mode
           togglePinningMode(false);
           
-          // Disable pin button until a new photo is selected
+          // Store a reference to current image before clearing
+          const currentBlob = processedImageBlob;
+          console.log('After createPhotoPlane, about to set processedImageBlob to null. Current value:', currentBlob);
+          
+          // Disable pin button until a new photo is selected - SETTING NULL AFTER createPhotoPlane executed
           processedImageBlob = null;
           updatePinButtonState();
         }
@@ -657,6 +821,7 @@ window.addEventListener('DOMContentLoaded', () => {
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         canvas.toBlob(blob => {
           processedImageBlob = blob;
+          console.log('processedImageBlob set from gallery:', processedImageBlob);
           imagePreview.src = URL.createObjectURL(blob);
           showPanelView('imagePreviewView');
           stopCamera();
@@ -678,6 +843,7 @@ window.addEventListener('DOMContentLoaded', () => {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     canvas.toBlob(blob => {
       processedImageBlob = blob;
+      console.log('processedImageBlob set from camera capture:', processedImageBlob);
       imagePreview.src = URL.createObjectURL(blob);
       showPanelView('imagePreviewView');
       stopCamera();
