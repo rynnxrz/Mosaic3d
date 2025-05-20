@@ -8,6 +8,39 @@ const METADATA_STORE = 'pinnedPhotoMetadata';
 let db = null;
 
 /**
+ * Get the database instance, opening it if necessary
+ * @returns {Promise} A promise that resolves with the database instance
+ */
+async function getDB() {
+  if (db) return db;
+  // This reuses parts of your existing initDB logic but returns a promise
+  return new Promise((resolve, reject) => {
+    console.log(`Attempting to get/open IndexedDB: ${DB_NAME}, version: ${DB_VERSION}`);
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+    request.onerror = (event) => {
+      console.error('IndexedDB error in getDB:', event.target.error);
+      reject(event.target.error);
+    };
+
+    request.onsuccess = (event) => {
+      db = event.target.result; // Assign to global db if you still use it elsewhere
+      console.log('Database accessed successfully in getDB.');
+      resolve(db);
+    };
+
+    request.onupgradeneeded = (event) => {
+      // This should ideally be handled by your main initDB,
+      // but getDB needs to be aware of it if it's the first open.
+      console.log('Database upgrade needed in getDB context.');
+      db = event.target.result;
+      // ... (your existing onupgradeneeded logic for creating stores if necessary)
+      // For this task, we assume stores are already created by the main initDB.
+    };
+  });
+}
+
+/**
  * Initialize the IndexedDB database
  * @returns {Promise} A promise that resolves when the database is ready
  */
@@ -71,17 +104,27 @@ export function initDB() {
 }
 
 /**
- * Save a pinned photo and its transform data to IndexedDB
+ * Persist a pinned photo (metadata + transform) to IndexedDB.
+ * All numeric fields are stored as numbers so typeof === 'number' on retrieval.
  * @param {Blob} imageBlob - The image blob to save
  * @param {string} imageId - The unique ID for the image
  * @param {Object} transformData - Position, orientation, scale data, and optional creator viewpoint
  * @returns {Promise} A promise that resolves when the save is complete
  */
 export function savePinnedItem(imageBlob, imageId, transformData) {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     if (!db) {
-      reject(new Error('Database not initialized. Call initDB() first.'));
-      return;
+      try {
+        // Attempt to initialize db if it's null, useful if called before main initDB completes
+        await initDB();
+        if (!db) {
+          reject(new Error('Database not initialized after attempted init.'));
+          return;
+        }
+      } catch (initError) {
+        reject(new Error('Database initialization failed in savePinnedItem: ' + initError));
+        return;
+      }
     }
 
     // Validate the input Blob
@@ -93,140 +136,119 @@ export function savePinnedItem(imageBlob, imageId, transformData) {
     });
 
     if (!imageBlob || !(imageBlob instanceof Blob) || imageBlob.size === 0) {
-      console.error('Invalid Blob provided to savePinnedItem:', imageBlob);
       reject(new Error('Invalid Blob: ' + (imageBlob ? `size: ${imageBlob.size}` : 'null or undefined')));
       return;
     }
 
-    // Create a clean copy of the transformData to ensure proper serialization
-    const cleanTransformData = {
-      position: { ...transformData.position },
-      orientation: { ...transformData.orientation },
-      scale: { ...transformData.scale },
-      userScale: transformData.userScale || 1.0,
-      aspectRatio: transformData.aspectRatio || 1.0
-    };
-    
-    // Add creator viewpoint if available
-    if (transformData.creatorViewpoint) {
-      if (transformData.creatorViewpoint.position) {
-        cleanTransformData.creatorViewpointPosition_x = transformData.creatorViewpoint.position.x;
-        cleanTransformData.creatorViewpointPosition_y = transformData.creatorViewpoint.position.y;
-        cleanTransformData.creatorViewpointPosition_z = transformData.creatorViewpoint.position.z;
-      }
-      if (transformData.creatorViewpoint.quaternion) {
-        cleanTransformData.creatorViewpointQuaternion_x = transformData.creatorViewpoint.quaternion.x;
-        cleanTransformData.creatorViewpointQuaternion_y = transformData.creatorViewpoint.quaternion.y;
-        cleanTransformData.creatorViewpointQuaternion_z = transformData.creatorViewpoint.quaternion.z;
-        cleanTransformData.creatorViewpointQuaternion_w = transformData.creatorViewpoint.quaternion.w;
-      }
-    }
-
-    // Convert the Blob to a base64-encoded string for reliable storage
     const reader = new FileReader();
-    reader.onload = function() {
+    reader.readAsDataURL(imageBlob); // Start reading the blob
+
+    reader.onload = () => { // This is an async callback
+      const base64ImageData = reader.result;
+      let transaction;
       try {
-        const base64String = reader.result;
-        console.log(`Read blob as base64 string, length: ${base64String.length}`);
-        
-        const transaction = db.transaction([IMAGES_STORE, METADATA_STORE], 'readwrite');
-        
-        transaction.onerror = (event) => {
-          console.error('Transaction error:', event.target.error);
-          reject(event.target.error);
-        };
-        
-        transaction.oncomplete = () => {
-          console.log(`Save transaction completed successfully for imageId: ${imageId}`);
-          resolve();
-        };
-        
-        // Save the image using a simple string representation
+        transaction = db.transaction([IMAGES_STORE, METADATA_STORE], 'readwrite');
+      } catch (e) {
+        reject(new Error(`Failed to start transaction: ${e.message}`));
+        return;
+      }
+
+      transaction.oncomplete = () => {
+        console.info(`[DB] Transaction completed for imageId: ${imageId}. Image and metadata saved.`);
+        resolve();
+      };
+      transaction.onerror = (event) => {
+        console.error('[DB] Transaction error in savePinnedItem:', event.target.error);
+        reject(event.target.error);
+      };
+
+      // 1. Save image to IMAGES_STORE
+      try {
         const imageStore = transaction.objectStore(IMAGES_STORE);
         const imageRecord = {
-          id: imageId,
-          base64: base64String,
+          id: imageId, // Assuming imageId is the key for images
+          base64: base64ImageData,
           type: imageBlob.type || 'image/jpeg'
         };
-        
-        console.log('Storing image record as base64 string:', {
-          id: imageId,
-          'base64 exists': !!base64String,
-          'base64 length': base64String.length,
-          type: imageBlob.type || 'image/jpeg'
-        });
-        
         const imageRequest = imageStore.put(imageRecord);
-        
-        imageRequest.onsuccess = () => {
-          console.log(`Image saved successfully with ID: ${imageId}`);
-          
-          // Verify the saved record
-          const verifyRequest = imageStore.get(imageId);
-          verifyRequest.onsuccess = () => {
-            const savedRecord = verifyRequest.result;
-            console.log('Verification - Saved image record:', {
-              id: savedRecord.id,
-              'base64 exists': !!savedRecord.base64,
-              'base64 length': savedRecord.base64 ? savedRecord.base64.length : 0,
-              type: savedRecord.type,
-              'record keys': Object.keys(savedRecord)
-            });
-          };
-        };
-        
         imageRequest.onerror = (event) => {
-          console.error('Error saving image:', event.target.error);
+          console.error('[DB] Error saving image to IMAGES_STORE:', event.target.error);
+          // Don't reject here, let the transaction.onerror handle it or it might commit prematurely
         };
-        
-        // Save the metadata
+        imageRequest.onsuccess = () => {
+          console.log(`[DB] Image saved to IMAGES_STORE with ID: ${imageId}`);
+        };
+      } catch (e) {
+        console.error("[DB] Error accessing IMAGES_STORE:", e);
+        if (!transaction.aborted) transaction.abort(); // Abort if possible
+        reject(e); // Reject the main promise
+        return;
+      }
+     
+      // 2. Prepare and save metadata to METADATA_STORE
+      try {
         const metadataStore = transaction.objectStore(METADATA_STORE);
         const metadataRecord = {
+          // id: auto-incrementing, so don't set it if your keyPath is 'id' and autoIncrement is true
           imageId: imageId,
-          position: cleanTransformData.position,
-          orientation: cleanTransformData.orientation,
-          scale: cleanTransformData.scale,
-          userScale: cleanTransformData.userScale,
-          aspectRatio: cleanTransformData.aspectRatio,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          position: transformData.position,
+          orientation: transformData.orientation,
+          scale: transformData.scale,
+          userScale: transformData.userScale,
+          aspectRatio: transformData.aspectRatio
         };
-        
-        // Add creator viewpoint data if available
-        if (cleanTransformData.creatorViewpointPosition_x !== undefined) {
-          metadataRecord.creatorViewpointPosition_x = cleanTransformData.creatorViewpointPosition_x;
-          metadataRecord.creatorViewpointPosition_y = cleanTransformData.creatorViewpointPosition_y;
-          metadataRecord.creatorViewpointPosition_z = cleanTransformData.creatorViewpointPosition_z;
+
+        const cv = transformData.creatorViewpoint;
+        if (cv && cv.position) {
+          metadataRecord.creatorViewpointPosition_x = Number(cv.position.x);
+          metadataRecord.creatorViewpointPosition_y = Number(cv.position.y);
+          metadataRecord.creatorViewpointPosition_z = Number(cv.position.z);
+
+          if (cv.quaternion) { // cv.quaternion is the THREE.Quaternion object from main.js
+            const q = cv.quaternion; // Alias for clarity
+            const qx = Number(q.x);
+            const qy = Number(q.y);
+            const qz = Number(q.z);
+            const qw = Number(q.w);
+
+            metadataRecord.creatorViewpointQuaternion_x = Number.isFinite(qx) ? qx : null;
+            metadataRecord.creatorViewpointQuaternion_y = Number.isFinite(qy) ? qy : null;
+            metadataRecord.creatorViewpointQuaternion_z = Number.isFinite(qz) ? qz : null;
+            metadataRecord.creatorViewpointQuaternion_w = Number.isFinite(qw) ? qw : null; // CRITICAL: Ensure 'w' is handled
+          } else {
+            // If cv.quaternion is null or undefined, explicitly set all components to null in the DB record
+            metadataRecord.creatorViewpointQuaternion_x = null;
+            metadataRecord.creatorViewpointQuaternion_y = null;
+            metadataRecord.creatorViewpointQuaternion_z = null;
+            metadataRecord.creatorViewpointQuaternion_w = null;
+          }
+        } else {
+          metadataRecord.creatorViewpointPosition_x = null;
+          metadataRecord.creatorViewpointPosition_y = null;
+          metadataRecord.creatorViewpointPosition_z = null;
+          ['x', 'y', 'z', 'w'].forEach(k => { metadataRecord[`creatorViewpointQuaternion_${k}`] = null; });
         }
-        
-        if (cleanTransformData.creatorViewpointQuaternion_x !== undefined) {
-          metadataRecord.creatorViewpointQuaternion_x = cleanTransformData.creatorViewpointQuaternion_x;
-          metadataRecord.creatorViewpointQuaternion_y = cleanTransformData.creatorViewpointQuaternion_y;
-          metadataRecord.creatorViewpointQuaternion_z = cleanTransformData.creatorViewpointQuaternion_z;
-          metadataRecord.creatorViewpointQuaternion_w = cleanTransformData.creatorViewpointQuaternion_w;
-        }
-        
-        const metadataRequest = metadataStore.add(metadataRecord);
-        metadataRequest.onsuccess = () => {
-          console.log(`Metadata saved successfully for imageId: ${imageId}`);
-        };
-        
+       
+        const metadataRequest = metadataStore.add(metadataRecord); // Use add for auto-incrementing key
         metadataRequest.onerror = (event) => {
-          console.error('Error saving metadata:', event.target.error);
+          console.error('[DB] Error saving metadata to METADATA_STORE:', event.target.error);
         };
-      } catch (error) {
-        console.error('Error processing base64 string:', error);
-        reject(error);
+        metadataRequest.onsuccess = (event_success) => { // event_success.target.result will be the new key
+          console.log(`[DB] Metadata saved to METADATA_STORE with new ID: ${event_success.target.result} for imageId: ${imageId}`);
+        };
+      } catch (e) {
+        console.error("[DB] Error accessing METADATA_STORE:", e);
+        if (!transaction.aborted) transaction.abort();
+        reject(e);
+        return;
       }
+    }; // End of reader.onload
+
+    reader.onerror = (event) => {
+      console.error('[DB] FileReader error in savePinnedItem:', event.target.error);
+      reject(event.target.error);
     };
-    
-    reader.onerror = (error) => {
-      console.error('FileReader error:', reader.error);
-      reject(reader.error || new Error('FileReader failed'));
-    };
-    
-    // Read the blob as a data URL to get a base64 string
-    console.log(`Starting to read blob as Data URL, size: ${imageBlob.size}`);
-    reader.readAsDataURL(imageBlob);
   });
 }
 
@@ -485,5 +507,85 @@ export function clearDatabase() {
       console.error('Error in clearDatabase:', error);
       reject(error);
     }
+  });
+}
+
+/**
+ * Return every pinned-photo record, reconstructing nested structures
+ * and guaranteeing numeric field types.
+ * @returns {Promise<Array>} A promise that resolves with an array of all metadata records
+ */
+export function getAllPinnedPhotoMetadata() { // Changed to non-async, returns Promise directly
+  return new Promise(async (resolve, reject) => {
+    if (!db) {
+      try {
+        await initDB(); // Or: await getDB();
+        if (!db) {
+          reject(new Error('Database not initialized after attempted init in getAll.'));
+          return;
+        }
+      } catch (initError) {
+        reject(new Error('Database initialization failed in getAll: ' + initError));
+        return;
+      }
+    }
+
+    let transaction;
+    try {
+      transaction = db.transaction([METADATA_STORE], 'readonly');
+    } catch (e) {
+      reject(new Error(`Failed to start transaction in getAll: ${e.message}`));
+      return;
+    }
+    
+    const objectStore = transaction.objectStore(METADATA_STORE);
+    const request = objectStore.getAll(); // Correctly call getAll() on the object store
+
+    request.onerror = (event) => {
+      console.error('[DB] Error getting all metadata:', event.target.error);
+      reject(event.target.error);
+    };
+
+    request.onsuccess = () => {
+      const allRawRecords = request.result;
+      console.log(`[DB] getAllPinnedPhotoMetadata: Retrieved ${allRawRecords.length} raw records.`);
+
+      const formattedRecords = allRawRecords.map(rec => {
+        const out = { ...rec };
+
+        const px = Number(rec.creatorViewpointPosition_x);
+        const py = Number(rec.creatorViewpointPosition_y);
+        const pz = Number(rec.creatorViewpointPosition_z);
+        if ([px, py, pz].every(Number.isFinite)) {
+          out.creatorViewpointPosition = { x: px, y: py, z: pz };
+        } else {
+          out.creatorViewpointPosition = null;
+        }
+
+        const qx_db = Number(rec.creatorViewpointQuaternion_x);
+        const qy_db = Number(rec.creatorViewpointQuaternion_y);
+        const qz_db = Number(rec.creatorViewpointQuaternion_z);
+        const qw_db = Number(rec.creatorViewpointQuaternion_w);
+
+        if ([qx_db, qy_db, qz_db, qw_db].every(Number.isFinite)) {
+          out.creatorViewpointQuaternion = { x: qx_db, y: qy_db, z: qz_db, w: qw_db };
+        } else {
+          out.creatorViewpointQuaternion = null; // If any component is not a finite number, set the whole object to null
+        }
+        
+        // Clean up flat fields from the output object (optional but good practice)
+        delete out.creatorViewpointPosition_x;
+        delete out.creatorViewpointPosition_y;
+        delete out.creatorViewpointPosition_z;
+        delete out.creatorViewpointQuaternion_x;
+        delete out.creatorViewpointQuaternion_y;
+        delete out.creatorViewpointQuaternion_z;
+        delete out.creatorViewpointQuaternion_w;
+
+        return out;
+      });
+      console.info('[DB] getAllPinnedPhotoMetadata: Processed records:', JSON.parse(JSON.stringify(formattedRecords)));
+      resolve(formattedRecords);
+    };
   });
 } 

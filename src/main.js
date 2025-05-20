@@ -1,7 +1,7 @@
 import './style.css'
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { initDB, savePinnedItem, loadPinnedItems } from './database.js';
+import { initDB, savePinnedItem, loadPinnedItems, getAllPinnedPhotoMetadata } from './database.js';
 
 window.addEventListener('DOMContentLoaded', () => {
   console.log('DOM fully loaded and parsed');
@@ -36,6 +36,25 @@ window.addEventListener('DOMContentLoaded', () => {
   let confirmInitialPosBtn = null;
   let stageIndicator = null;
   let finalPhotoTransform = null;
+
+  // Viewpoint review mode variables
+  let isReviewingViewpoints = false;
+  let viewablePinsQueue = [];
+  let currentViewpointIndex = -1;
+  
+  // Camera animation variables for view mode
+  let isTransitioningCamera = false;
+  let startPosition = null;
+  let startQuaternion = null;
+  let targetPosition = null;
+  let targetQuaternion = null;
+  const LERP_FACTOR = 0.05; // Position interpolation factor
+  const SLERP_FACTOR = 0.05; // Rotation interpolation factor
+  let allPinnedPhotosData = [];
+  let currentViewedPinIndex = -1;
+  let currentPinInfoElement = null;
+  let transitionFrameCounter = 0;
+  const MAX_TRANSITION_FRAMES = 300; // 5 seconds at 60fps
 
   // Stage 3 variables
   let recordedCreatorPosition = null;
@@ -81,6 +100,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const chooseDifferentBtn = getEl('chooseDifferentBtn');
   const photoScaleSlider = getEl('photoScaleSlider');
   const photoScaleValue = getEl('photoScaleValue');
+  const reviewCreatorViewpointsBtn = getEl('reviewCreatorViewpointsBtn');
 
   if (!canvasContainer) {
     console.error('Error: #canvas-container not found in DOM.');
@@ -313,7 +333,41 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateCamera() {
-    // --- Look (yaw/pitch) ---
+    // Skip user controls if camera is transitioning
+    if (isTransitioningCamera) {
+      return;
+    }
+    
+    // If we are in review mode AND no new look input,
+    // let the camera's quaternion remain as set by the transition's end
+    if (isReviewingViewpoints && lookDelta.x === 0 && lookDelta.y === 0) {
+      // We are at a creator viewpoint, and the user isn't actively trying to look around.
+      // The camera's quaternion is already correctly set from the transition's end.
+      // We might still want to handle joystick movement if applicable, but skip lookAt based on yaw/pitch.
+      
+      // Handle joystick movement (copied from existing logic, but without lookAt)
+      const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)); // Use current yaw for forward
+      const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw)); // Use current yaw for right
+      let move = new THREE.Vector3();
+      move.addScaledVector(forward, -joystickDelta.y * MOVE_SENSITIVITY);
+      move.addScaledVector(right, -joystickDelta.x * MOVE_SENSITIVITY);
+      
+      const newPos = camera.position.clone().add(move);
+      // IMPORTANT: When at a creator viewpoint, camera.position.y should be targetPosition.y
+      // For simplicity in MVP, if joystick is used here, it might revert to CAMERA_HEIGHT.
+      // For now, let's keep it simple: allow movement but it might change height.
+      newPos.y = CAMERA_HEIGHT; 
+      
+      const canMove = tryMoveCamera(newPos);
+      if (canMove) {
+        camera.position.copy(newPos);
+      }
+      // DO NOT CALL camera.lookAt() here if no new look input.
+      // The camera.quaternion is already set.
+      return; 
+    }
+    
+    // --- Default Look (yaw/pitch) update logic for user control ---
     yaw -= lookDelta.x * LOOK_SENSITIVITY * 0.01;
     pitch -= lookDelta.y * LOOK_SENSITIVITY * 0.01;
     pitch = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, pitch));
@@ -367,6 +421,56 @@ window.addEventListener('DOMContentLoaded', () => {
       
       // Make the preview plane face the camera
       tempPreviewPlane.quaternion.copy(camera.quaternion);
+    }
+    
+    // Handle camera transition for view mode
+    if (isTransitioningCamera && targetPosition && targetQuaternion) {
+      // Increment the transition frame counter
+      transitionFrameCounter++;
+      
+      // Interpolate position
+      camera.position.lerp(targetPosition, LERP_FACTOR);
+      
+      // Interpolate rotation using spherical interpolation
+      camera.quaternion.slerp(targetQuaternion, SLERP_FACTOR);
+      
+      // Check if we're close enough to the target to end the transition
+      const positionDistance = camera.position.distanceTo(targetPosition);
+      const quaternionDot = camera.quaternion.dot(targetQuaternion);
+      
+      // Condition for completion:
+      // Position is close OR rotation is very close OR max frames reached.
+      // Made position check slightly more lenient, dot product check also.
+      if ((positionDistance < 0.02 && Math.abs(quaternionDot) > 0.999) || // Natural completion
+          transitionFrameCounter > MAX_TRANSITION_FRAMES)                 // Forced completion
+      {
+        camera.position.copy(targetPosition);
+        camera.quaternion.copy(targetQuaternion);
+        
+        isTransitioningCamera = false; // CRITICAL: Ensure this is set
+        transitionFrameCounter = 0;
+        console.log('Camera transition ended (distance: ' + positionDistance.toFixed(3) + ', dot: ' + quaternionDot.toFixed(5) + ')');
+
+        // Synchronize yaw and pitch with the new camera quaternion
+        // Get the forward vector from the camera's new quaternion
+        const forwardVector = new THREE.Vector3(0, 0, -1);
+        forwardVector.applyQuaternion(camera.quaternion);
+        
+        // Calculate yaw (around Y axis)
+        yaw = Math.atan2(forwardVector.x, forwardVector.z);
+        
+        // Calculate pitch (angle with XZ plane)
+        // Ensure forwardVector.y is clamped between -1 and 1 for asin
+        const clampedY = Math.max(-1, Math.min(1, forwardVector.y));
+        pitch = Math.asin(-clampedY); // Pitch is often negated depending on convention
+
+        console.log('Synchronized yaw:', yaw.toFixed(3), 'pitch:', pitch.toFixed(3));
+
+        const event = new CustomEvent('cameraTransitionComplete', {
+          detail: { index: currentViewpointIndex }
+        });
+        document.dispatchEvent(event);
+      }
     }
     
     renderer.render(scene, camera);
@@ -776,9 +880,28 @@ window.addEventListener('DOMContentLoaded', () => {
       
       // Add creator viewpoint if available
       if (creatorViewpoint && creatorViewpoint.position) {
+        let qData = null;
+        if (creatorViewpoint.quaternion) { // Ensure the THREE.Quaternion object itself exists
+          const ثلاثية_الابعاد_كواتيرنيون = creatorViewpoint.quaternion; // Use a distinct variable name for clarity
+          console.log('[DEBUG main.js createPhotoPlane] Original THREE.Quaternion for viewpoint: ', 
+            {x: ثلاثية_الابعاد_كواتيرنيون.x, y: ثلاثية_الابعاد_كواتيرنيون.y, z: ثلاثية_الابعاد_كواتيرنيون.z, w: ثلاثية_الابعاد_كواتيرنيون.w});
+          
+          qData = {
+            x: Number(ثلاثية_الابعاد_كواتيرنيون.x),
+            y: Number(ثلاثية_الابعاد_كواتيرنيون.y),
+            z: Number(ثلاثية_الابعاد_كواتيرنيون.z),
+            w: Number(ثلاثية_الابعاد_كواتيرنيون.w)
+          };
+          console.log('[DEBUG main.js createPhotoPlane] Prepared qData for DB: ', qData);
+        }
+        
         transformDataForDB.creatorViewpoint = {
-          position: { ...creatorViewpoint.position },
-          quaternion: creatorViewpoint.quaternion ? { ...creatorViewpoint.quaternion } : undefined
+          position: {
+            x: creatorViewpoint.position.x,
+            y: creatorViewpoint.position.y,
+            z: creatorViewpoint.position.z
+          },
+          quaternion: qData // Assign the explicitly created plain object or null
         };
       }
       
@@ -1465,9 +1588,39 @@ window.addEventListener('DOMContentLoaded', () => {
       completePlacementBtn.addEventListener('click', completePlacement);
     }
     
-    // Reset viewpoint recording state
+    // --- START OF NEW RESET LOGIC ---
+    // Reset viewpoint recording state variables
     recordedCreatorPosition = null;
     recordedCreatorQuaternion = null;
+
+    // Reset "Record Viewpoint" button
+    if (recordViewpointBtn) {
+      recordViewpointBtn.textContent = 'Record Viewpoint';
+      recordViewpointBtn.disabled = false;
+      recordViewpointBtn.style.background = 'rgba(0, 120, 255, 0.8)'; // Original blue color
+      recordViewpointBtn.style.opacity = '1';
+    }
+
+    // Reset "Skip Viewpoint" button
+    if (skipViewpointBtn) {
+      skipViewpointBtn.textContent = 'Skip Viewpoint Setup';
+      skipViewpointBtn.disabled = false;
+      skipViewpointBtn.style.background = 'rgba(120, 120, 120, 0.8)'; // Original gray color
+      skipViewpointBtn.style.opacity = '1';
+    }
+
+    // Reset "Complete" button
+    if (completePlacementBtn) {
+      completePlacementBtn.disabled = true; // Should be disabled until viewpoint is recorded or skipped
+      completePlacementBtn.style.opacity = '0.5'; // Less prominent
+      // No need to change text content for "Complete"
+    }
+
+    // Reset instructions text
+    if (viewpointInstructionsElement) {
+      viewpointInstructionsElement.textContent = 'Please move to the best position you think to view this photo, then click "Record Viewpoint"';
+    }
+    // --- END OF NEW RESET LOGIC ---
     
     // Show the Stage 3 UI elements
     viewpointInstructionsElement.style.display = 'block';
@@ -1589,5 +1742,576 @@ window.addEventListener('DOMContentLoaded', () => {
     if (stageIndicator) stageIndicator.style.display = 'none';
     
     console.log('Photo placement completed and all state reset');
+  }
+
+  // Function to load and prepare viewpoints for review mode
+  async function loadAndPrepareViewpoints() {
+    console.log('Loading viewpoints...');
+    
+    try {
+      // Get all metadata records using the new database function
+      const metadataRecords = await getAllPinnedPhotoMetadata();
+      console.log(`Found ${metadataRecords.length} total pinned photos`);
+      
+      // Add detailed console.table for debugging
+      console.table(
+        metadataRecords.map(r => ({
+          id: r.id,
+          imgId: r.imageId,
+          hasViewpointPosObj: !!r.creatorViewpointPosition,
+          px: r.creatorViewpointPosition?.x,
+          py: r.creatorViewpointPosition?.y,
+          pz: r.creatorViewpointPosition?.z,
+          hasViewpointQuatObj: !!r.creatorViewpointQuaternion,
+          qx: r.creatorViewpointQuaternion?.x,
+          qy: r.creatorViewpointQuaternion?.y,
+          qz: r.creatorViewpointQuaternion?.z,
+          qw: r.creatorViewpointQuaternion?.w,
+          types: {
+            px: typeof r.creatorViewpointPosition?.x,
+            py: typeof r.creatorViewpointPosition?.y,
+            pz: typeof r.creatorViewpointPosition?.z,
+            qx: typeof r.creatorViewpointQuaternion?.x,
+            qy: typeof r.creatorViewpointQuaternion?.y,
+            qz: typeof r.creatorViewpointQuaternion?.z,
+            qw: typeof r.creatorViewpointQuaternion?.w,
+          },
+        }))
+      );
+      
+      // Reset the global variable
+      allPinnedPhotosData = metadataRecords;
+      
+      // Filter records to only include those with valid creator viewpoints
+      const validViewpointRecords = metadataRecords.filter(pinData => {
+        const p = pinData.creatorViewpointPosition;
+        const q = pinData.creatorViewpointQuaternion;
+
+        // Check if the position object and its components are valid numbers
+        const hasValidPosition =
+          p && // p (creatorViewpointPosition object) exists
+          typeof p.x === 'number' && Number.isFinite(p.x) &&
+          typeof p.y === 'number' && Number.isFinite(p.y) &&
+          typeof p.z === 'number' && Number.isFinite(p.z);
+
+        // Check if the quaternion object and its components are valid numbers
+        const hasValidQuaternion =
+          q && // q (creatorViewpointQuaternion object) exists
+          typeof q.x === 'number' && Number.isFinite(q.x) &&
+          typeof q.y === 'number' && Number.isFinite(q.y) &&
+          typeof q.z === 'number' && Number.isFinite(q.z) &&
+          typeof q.w === 'number' && Number.isFinite(q.w);
+
+        return hasValidPosition && hasValidQuaternion;
+      });
+      
+      console.log(`Found ${validViewpointRecords.length} photos with valid creator viewpoints`);
+      
+      // Transform the filtered records into the viewablePinsQueue format
+      viewablePinsQueue = validViewpointRecords.map(record => {
+        return {
+          imageId: record.imageId,
+          photoPosition: new THREE.Vector3(
+            record.position.x,
+            record.position.y,
+            record.position.z
+          ),
+          photoQuaternion: new THREE.Quaternion(
+            record.orientation.x,
+            record.orientation.y,
+            record.orientation.z,
+            record.orientation.w
+          ),
+          creatorViewpointPosition: new THREE.Vector3(
+            record.creatorViewpointPosition.x,
+            record.creatorViewpointPosition.y,
+            record.creatorViewpointPosition.z
+          ),
+          creatorViewpointQuaternion: new THREE.Quaternion(
+            record.creatorViewpointQuaternion.x,
+            record.creatorViewpointQuaternion.y,
+            record.creatorViewpointQuaternion.z,
+            record.creatorViewpointQuaternion.w
+          ),
+          metadata: record // Store the full metadata for reference
+        };
+      });
+      
+      console.log('Viewable pins queue prepared:', viewablePinsQueue);
+      
+      // Check if we have valid viewpoints to show
+      if (viewablePinsQueue.length > 0) {
+        // Start with the first viewpoint
+        currentViewedPinIndex = 0;
+        // Start the view mode by moving to the first pin
+        moveToPhotoView(currentViewedPinIndex);
+      } else {
+        console.log('No pins with recorded viewpoints found.');
+        isReviewingViewpoints = false;
+        alert('No photos with creator viewpoints found.');
+      }
+    } catch (error) {
+      console.error('Error loading viewpoints:', error);
+      isReviewingViewpoints = false;
+      alert('Error loading viewpoints. Please try again.');
+    }
+  }
+  
+  // Placeholder function for viewpoint transition (will be implemented in next step)
+  function initiateViewpointTransition(index) {
+    console.log(`Initiating transition to viewpoint at index ${index}`);
+    // To be implemented in the next step
+  }
+  
+  // Function to move camera to view a specific pinned photo
+  function moveToPhotoView(index) {
+    console.log(`Moving to photo view at index ${index}`);
+    
+    // Validate index
+    if (index < 0 || index >= viewablePinsQueue.length) {
+      console.error(`Invalid index: ${index}. Valid range is 0-${viewablePinsQueue.length - 1}`);
+      return;
+    }
+    
+    // Get pin data
+    const pinData = viewablePinsQueue[index];
+    
+    // Update current viewpoint index
+    currentViewpointIndex = index;
+    
+    // Update info text and UI elements
+    updateViewModeUI(index);
+    
+    // Prepare for camera transition
+    startPosition = camera.position.clone();
+    startQuaternion = camera.quaternion.clone();
+    
+    // Set target position and orientation
+    if (pinData.creatorViewpointPosition && pinData.creatorViewpointQuaternion) {
+      // Use recorded creator viewpoint
+      targetPosition = pinData.creatorViewpointPosition.clone();
+      targetQuaternion = pinData.creatorViewpointQuaternion.clone();
+      console.log('Using creator viewpoint for camera transition:', {
+        position: targetPosition,
+        quaternion: targetQuaternion
+      });
+    } else {
+      // Fallback: Calculate a reasonable position looking at the photo
+      console.log('No creator viewpoint available, using fallback positioning');
+      
+      // Get photo position and normal direction
+      const photoPosition = pinData.photoPosition.clone();
+      
+      // Create a direction vector facing away from the photo (simplified approach)
+      // We'll offset in the opposite direction of the photo's forward vector
+      const photoForward = new THREE.Vector3(0, 0, -1);
+      photoForward.applyQuaternion(pinData.photoQuaternion);
+      
+      // Position the camera at a reasonable distance from the photo
+      const VIEWING_DISTANCE = 2.0;
+      targetPosition = photoPosition.clone().add(photoForward.multiplyScalar(VIEWING_DISTANCE));
+      
+      // Make sure we maintain a reasonable eye level
+      targetPosition.y = CAMERA_HEIGHT;
+      
+      // Create a quaternion that will make the camera look at the photo
+      const lookAt = new THREE.Matrix4();
+      lookAt.lookAt(targetPosition, photoPosition, new THREE.Vector3(0, 1, 0));
+      targetQuaternion = new THREE.Quaternion().setFromRotationMatrix(lookAt);
+    }
+    
+    // Check if we're already very close to the target position/orientation
+    // This is a special case where almost no transition would be needed
+    const positionDistance = camera.position.distanceTo(targetPosition);
+    const quaternionDot = camera.quaternion.dot(targetQuaternion);
+    
+    if (positionDistance < 0.001 && Math.abs(quaternionDot) > 0.9999) {
+      // We're already at the target, no need for transition
+      console.log('Already at target position/orientation, skipping transition');
+      
+      // Still need to synchronize yaw/pitch with the current quaternion
+      const forwardVector = new THREE.Vector3(0, 0, -1);
+      forwardVector.applyQuaternion(camera.quaternion);
+      
+      // Calculate yaw (around Y axis)
+      yaw = Math.atan2(forwardVector.x, forwardVector.z);
+      
+      // Calculate pitch (angle with XZ plane)
+      const clampedY = Math.max(-1, Math.min(1, forwardVector.y));
+      pitch = Math.asin(-clampedY);
+      
+      console.log('Synchronized yaw/pitch without transition:', yaw.toFixed(3), pitch.toFixed(3));
+      
+      // Dispatch completion event immediately
+      const event = new CustomEvent('cameraTransitionComplete', {
+        detail: { index: currentViewpointIndex }
+      });
+      document.dispatchEvent(event);
+    } else {
+      // Normal case - start the transition
+      isTransitioningCamera = true;
+      transitionFrameCounter = 0;
+    }
+    
+    // Highlight the current pin's mesh if it exists in the scene
+    highlightCurrentPin(pinData.imageId);
+  }
+  
+  // Function to highlight the current pin's mesh in the scene
+  function highlightCurrentPin(imageId) {
+    // Reset any previous highlights
+    scene.traverse((object) => {
+      if (object.isMesh && object.userData && object.userData.isHighlighted) {
+        // Remove highlight effect
+        if (object.material.emissive) {
+          object.material.emissive.set(0x000000);
+          object.material.emissiveIntensity = 0;
+        }
+        object.userData.isHighlighted = false;
+      }
+    });
+    
+    // Find and highlight the current pin
+    scene.traverse((object) => {
+      if (object.isMesh && object.userData && object.userData.imageId === imageId) {
+        // Apply highlight effect
+        if (object.material.emissive) {
+          object.material.emissive.set(0x555555);
+          object.material.emissiveIntensity = 0.5;
+          object.userData.isHighlighted = true;
+          console.log(`Highlighted pin with imageId: ${imageId}`);
+        }
+      }
+    });
+  }
+
+  // Update UI elements for view mode
+  function updateViewModeUI(index) {
+    // If we have UI elements for showing current pin info, update them
+    if (currentPinInfoElement) {
+      currentPinInfoElement.textContent = `Viewing Photo ${index + 1} / ${viewablePinsQueue.length}`;
+      currentPinInfoElement.style.display = 'block';
+    }
+    
+    // Update button states
+    const prevButton = document.getElementById('prevViewpointBtn');
+    const nextButton = document.getElementById('nextViewpointBtn');
+    
+    if (prevButton && nextButton) {
+      // First pin - disable previous button
+      if (index <= 0) {
+        prevButton.disabled = true;
+        prevButton.style.opacity = '0.5';
+        prevButton.style.cursor = 'not-allowed';
+      } else {
+        prevButton.disabled = false;
+        prevButton.style.opacity = '1';
+        prevButton.style.cursor = 'pointer';
+      }
+      
+      // Last pin - disable next button
+      if (index >= viewablePinsQueue.length - 1) {
+        nextButton.disabled = true;
+        nextButton.style.opacity = '0.5';
+        nextButton.style.cursor = 'not-allowed';
+      } else {
+        nextButton.disabled = false;
+        nextButton.style.opacity = '1';
+        nextButton.style.cursor = 'pointer';
+      }
+      
+      // Add visual indicator to show current button states
+      if (index <= 0) {
+        prevButton.innerHTML = '&#x25C0; First';
+      } else {
+        prevButton.innerHTML = '&#x25C0; Previous';
+      }
+      
+      if (index >= viewablePinsQueue.length - 1) {
+        nextButton.innerHTML = 'Last &#x25B6;';
+      } else {
+        nextButton.innerHTML = 'Next &#x25B6;';
+      }
+    }
+    
+    // Log the current pin info
+    console.log(`Updated UI: Viewing pin ${index + 1} of ${viewablePinsQueue.length}`);
+  }
+
+  // Function to exit viewpoint review mode
+  function exitViewMode() {
+    console.log('Exiting viewpoint review mode (attempting)');
+    
+    isTransitioningCamera = false; // Forcibly stop transition checks/logic
+    transitionFrameCounter = 0;
+    
+    // Only exit if we're actually in review mode
+    if (!isReviewingViewpoints) {
+      console.log('Not in viewpoint review mode, ignoring exit request');
+      return;
+    }
+    
+    // Reset flags and state
+    isReviewingViewpoints = false;
+    currentViewpointIndex = -1;
+    
+    // Clear any active pin highlights
+    scene.traverse((object) => {
+      if (object.isMesh && object.userData && object.userData.isHighlighted) {
+        if (object.material.emissive) {
+          object.material.emissive.set(0x000000);
+          object.material.emissiveIntensity = 0;
+        }
+        object.userData.isHighlighted = false;
+      }
+    });
+    
+    // Hide UI elements
+    if (currentPinInfoElement) {
+      currentPinInfoElement.style.display = 'none';
+    }
+    
+    // Remove navigation controls
+    removeViewModeControls();
+    
+    // Show the add content button again
+    if (addContentBtn) {
+      addContentBtn.style.display = 'block';
+    }
+    
+    // Clear viewpoint data
+    viewablePinsQueue = [];
+    allPinnedPhotosData = [];
+    
+    // Reset camera targets
+    targetPosition = null;
+    targetQuaternion = null;
+    
+    console.log('Viewpoint review mode exited successfully');
+  }
+
+  // Function to create UI controls for navigating viewpoints
+  function createViewModeControls() {
+    // Create container for controls
+    const controlsContainer = document.createElement('div');
+    controlsContainer.id = 'viewModeControls';
+    controlsContainer.style.position = 'fixed';
+    controlsContainer.style.bottom = '30px';
+    controlsContainer.style.left = '50%';
+    controlsContainer.style.transform = 'translateX(-50%)';
+    controlsContainer.style.display = 'flex';
+    controlsContainer.style.gap = '15px';
+    controlsContainer.style.zIndex = '101';
+    
+    // Previous button
+    const prevButton = document.createElement('button');
+    prevButton.id = 'prevViewpointBtn';
+    prevButton.textContent = 'Previous';
+    prevButton.style.padding = '10px 20px';
+    prevButton.style.backgroundColor = 'rgba(40, 40, 45, 0.85)';
+    prevButton.style.color = 'white';
+    prevButton.style.border = 'none';
+    prevButton.style.borderRadius = '8px';
+    prevButton.style.fontSize = '16px';
+    prevButton.style.cursor = 'pointer';
+    prevButton.style.boxShadow = '0 2px 5px rgba(0, 0, 0, 0.2)';
+    
+    // Exit button
+    const exitButton = document.createElement('button');
+    exitButton.id = 'exitViewModeBtn';
+    exitButton.textContent = 'Exit View Mode';
+    exitButton.style.padding = '10px 20px';
+    exitButton.style.backgroundColor = 'rgba(220, 53, 69, 0.85)';
+    exitButton.style.color = 'white';
+    exitButton.style.border = 'none';
+    exitButton.style.borderRadius = '8px';
+    exitButton.style.fontSize = '16px';
+    exitButton.style.cursor = 'pointer';
+    exitButton.style.boxShadow = '0 2px 5px rgba(0, 0, 0, 0.2)';
+    
+    // Next button
+    const nextButton = document.createElement('button');
+    nextButton.id = 'nextViewpointBtn';
+    nextButton.textContent = 'Next';
+    nextButton.style.padding = '10px 20px';
+    nextButton.style.backgroundColor = 'rgba(40, 40, 45, 0.85)';
+    nextButton.style.color = 'white';
+    nextButton.style.border = 'none';
+    nextButton.style.borderRadius = '8px';
+    nextButton.style.fontSize = '16px';
+    nextButton.style.cursor = 'pointer';
+    nextButton.style.boxShadow = '0 2px 5px rgba(0, 0, 0, 0.2)';
+    
+    // Add buttons to container
+    controlsContainer.appendChild(prevButton);
+    controlsContainer.appendChild(exitButton);
+    controlsContainer.appendChild(nextButton);
+    
+    // Add keyboard hint
+    const keyboardHint = document.createElement('div');
+    keyboardHint.id = 'keyboardHint';
+    keyboardHint.textContent = 'Keyboard: ← → arrows or ESC to exit';
+    keyboardHint.style.position = 'fixed';
+    keyboardHint.style.bottom = '80px';
+    keyboardHint.style.left = '50%';
+    keyboardHint.style.transform = 'translateX(-50%)';
+    keyboardHint.style.fontSize = '14px';
+    keyboardHint.style.color = 'rgba(255, 255, 255, 0.7)';
+    keyboardHint.style.padding = '5px 10px';
+    keyboardHint.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+    keyboardHint.style.borderRadius = '5px';
+    keyboardHint.style.zIndex = '101';
+    document.body.appendChild(keyboardHint);
+    
+    // Add container to document
+    document.body.appendChild(controlsContainer);
+    
+    
+    // Add event listeners
+    prevButton.addEventListener('click', navigateToPreviousPin);
+    nextButton.addEventListener('click', navigateToNextPin);
+    exitButton.addEventListener('click', exitViewMode);
+    
+    // Add keyboard navigation
+    document.addEventListener('keydown', handleViewModeKeyDown);
+    
+    // Return the container element
+    return controlsContainer;
+  }
+  
+  // Function to remove view mode controls
+  function removeViewModeControls() {
+    const controlsContainer = document.getElementById('viewModeControls');
+    if (controlsContainer) {
+      document.body.removeChild(controlsContainer);
+    }
+    
+    // Also remove keyboard hint
+    const keyboardHint = document.getElementById('keyboardHint');
+    if (keyboardHint) {
+      document.body.removeChild(keyboardHint);
+    }
+    
+    // Remove keyboard navigation listener
+    document.removeEventListener('keydown', handleViewModeKeyDown);
+  }
+  
+  // Function to handle keyboard navigation in view mode
+  function handleViewModeKeyDown(event) {
+    // Only process if in review mode and not during transitions
+    if (!isReviewingViewpoints || isTransitioningCamera) return;
+    
+    switch (event.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+      case 'n':
+      case 'N':
+        navigateToNextPin();
+        event.preventDefault();
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+      case 'p':
+      case 'P':
+        navigateToPreviousPin();
+        event.preventDefault();
+        break;
+      case 'Escape':
+        exitViewMode();
+        event.preventDefault();
+        break;
+    }
+  }
+  
+  // Function to navigate to the next pin
+  function navigateToNextPin() {
+    if (isTransitioningCamera) {
+      console.log('Camera is already transitioning, ignoring navigation request');
+      return;
+    }
+    
+    if (currentViewpointIndex < viewablePinsQueue.length - 1) {
+      moveToPhotoView(currentViewpointIndex + 1);
+    } else {
+      console.log('Already at the last viewpoint');
+      // Visual feedback that we're at the last pin
+      const nextButton = document.getElementById('nextViewpointBtn');
+      if (nextButton) {
+        nextButton.classList.add('button-flash');
+        setTimeout(() => {
+          nextButton.classList.remove('button-flash');
+        }, 300);
+      }
+    }
+  }
+  
+  // Function to navigate to the previous pin
+  function navigateToPreviousPin() {
+    if (isTransitioningCamera) {
+      console.log('Camera is already transitioning, ignoring navigation request');
+      return;
+    }
+    
+    if (currentViewpointIndex > 0) {
+      moveToPhotoView(currentViewpointIndex - 1);
+    } else {
+      console.log('Already at the first viewpoint');
+      // Visual feedback that we're at the first pin
+      const prevButton = document.getElementById('prevViewpointBtn');
+      if (prevButton) {
+        prevButton.classList.add('button-flash');
+        setTimeout(() => {
+          prevButton.classList.remove('button-flash');
+        }, 300);
+      }
+    }
+  }
+
+  // Add event listener for review creator viewpoints button
+  if (reviewCreatorViewpointsBtn) {
+    reviewCreatorViewpointsBtn.addEventListener('click', () => {
+      console.log('Entering viewpoint review mode.');
+      isReviewingViewpoints = true;
+      
+      // Create a pin info element if it doesn't exist yet
+      if (!currentPinInfoElement) {
+        currentPinInfoElement = document.createElement('div');
+        currentPinInfoElement.id = 'currentPinInfo';
+        currentPinInfoElement.style.position = 'fixed';
+        currentPinInfoElement.style.top = '20px';
+        currentPinInfoElement.style.left = '50%';
+        currentPinInfoElement.style.transform = 'translateX(-50%)';
+        currentPinInfoElement.style.background = 'rgba(0, 0, 0, 0.75)';
+        currentPinInfoElement.style.color = 'white';
+        currentPinInfoElement.style.padding = '10px 18px';
+        currentPinInfoElement.style.borderRadius = '16px';
+        currentPinInfoElement.style.zIndex = '100';
+        currentPinInfoElement.style.fontWeight = '600';
+        currentPinInfoElement.style.fontSize = '16px';
+        currentPinInfoElement.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.2)';
+        currentPinInfoElement.style.textAlign = 'center';
+        currentPinInfoElement.style.display = 'none';
+        document.body.appendChild(currentPinInfoElement);
+      }
+      
+      // Show the pin info element
+      if (currentPinInfoElement) {
+        currentPinInfoElement.style.display = 'block';
+      }
+      
+      // Create navigation controls
+      createViewModeControls();
+      
+      // Hide the main add content button while in view mode
+      if (addContentBtn) {
+        addContentBtn.style.display = 'none';
+      }
+      
+      // Load viewpoint data and begin camera transitions
+      loadAndPrepareViewpoints();
+      
+      // Hide the content panel for a more focused experience
+      closePanel();
+    });
   }
 });
