@@ -1,6 +1,6 @@
 // Database configuration
 const DB_NAME = 'Mosaic3DUserCreationsDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const IMAGES_STORE = 'images';
 const METADATA_STORE = 'pinnedPhotoMetadata';
 
@@ -39,6 +39,8 @@ export function initDB() {
     request.onupgradeneeded = (event) => {
       db = event.target.result;
       console.log('Database upgrade needed, creating object stores');
+      const oldVersion = event.oldVersion;
+      console.log(`Upgrading from version ${oldVersion} to ${DB_VERSION}`);
       
       // Create object store for images with imageId as key
       if (!db.objectStoreNames.contains(IMAGES_STORE)) {
@@ -60,6 +62,9 @@ export function initDB() {
         console.log(`Created '${METADATA_STORE}' object store with keyPath 'id' and index on 'imageId'`);
       } else {
         console.log(`Object store '${METADATA_STORE}' already exists`);
+        
+        // We don't need to modify existing store structure for version upgrade
+        // IndexedDB automatically preserves existing data and structure
       }
     };
   });
@@ -69,7 +74,7 @@ export function initDB() {
  * Save a pinned photo and its transform data to IndexedDB
  * @param {Blob} imageBlob - The image blob to save
  * @param {string} imageId - The unique ID for the image
- * @param {Object} transformData - Position, orientation, scale data
+ * @param {Object} transformData - Position, orientation, scale data, and optional creator viewpoint
  * @returns {Promise} A promise that resolves when the save is complete
  */
 export function savePinnedItem(imageBlob, imageId, transformData) {
@@ -97,8 +102,25 @@ export function savePinnedItem(imageBlob, imageId, transformData) {
     const cleanTransformData = {
       position: { ...transformData.position },
       orientation: { ...transformData.orientation },
-      scale: { ...transformData.scale }
+      scale: { ...transformData.scale },
+      userScale: transformData.userScale || 1.0,
+      aspectRatio: transformData.aspectRatio || 1.0
     };
+    
+    // Add creator viewpoint if available
+    if (transformData.creatorViewpoint) {
+      if (transformData.creatorViewpoint.position) {
+        cleanTransformData.creatorViewpointPosition_x = transformData.creatorViewpoint.position.x;
+        cleanTransformData.creatorViewpointPosition_y = transformData.creatorViewpoint.position.y;
+        cleanTransformData.creatorViewpointPosition_z = transformData.creatorViewpoint.position.z;
+      }
+      if (transformData.creatorViewpoint.quaternion) {
+        cleanTransformData.creatorViewpointQuaternion_x = transformData.creatorViewpoint.quaternion.x;
+        cleanTransformData.creatorViewpointQuaternion_y = transformData.creatorViewpoint.quaternion.y;
+        cleanTransformData.creatorViewpointQuaternion_z = transformData.creatorViewpoint.quaternion.z;
+        cleanTransformData.creatorViewpointQuaternion_w = transformData.creatorViewpoint.quaternion.w;
+      }
+    }
 
     // Convert the Blob to a base64-encoded string for reliable storage
     const reader = new FileReader();
@@ -164,8 +186,24 @@ export function savePinnedItem(imageBlob, imageId, transformData) {
           position: cleanTransformData.position,
           orientation: cleanTransformData.orientation,
           scale: cleanTransformData.scale,
+          userScale: cleanTransformData.userScale,
+          aspectRatio: cleanTransformData.aspectRatio,
           timestamp: Date.now()
         };
+        
+        // Add creator viewpoint data if available
+        if (cleanTransformData.creatorViewpointPosition_x !== undefined) {
+          metadataRecord.creatorViewpointPosition_x = cleanTransformData.creatorViewpointPosition_x;
+          metadataRecord.creatorViewpointPosition_y = cleanTransformData.creatorViewpointPosition_y;
+          metadataRecord.creatorViewpointPosition_z = cleanTransformData.creatorViewpointPosition_z;
+        }
+        
+        if (cleanTransformData.creatorViewpointQuaternion_x !== undefined) {
+          metadataRecord.creatorViewpointQuaternion_x = cleanTransformData.creatorViewpointQuaternion_x;
+          metadataRecord.creatorViewpointQuaternion_y = cleanTransformData.creatorViewpointQuaternion_y;
+          metadataRecord.creatorViewpointQuaternion_z = cleanTransformData.creatorViewpointQuaternion_z;
+          metadataRecord.creatorViewpointQuaternion_w = cleanTransformData.creatorViewpointQuaternion_w;
+        }
         
         const metadataRequest = metadataStore.add(metadataRecord);
         metadataRequest.onsuccess = () => {

@@ -21,8 +21,6 @@ window.addEventListener('DOMContentLoaded', () => {
   let pinningMode = false;
   let tempPreviewPlane = null;
   let pinnedPhotoCounter = 0;
-  let selectedPinningPosition = null;
-  let confirmPinButton = null;
   
   // Photo scaling variables
   let currentPhotoScale = 1.0;
@@ -39,6 +37,14 @@ window.addEventListener('DOMContentLoaded', () => {
   let stageIndicator = null;
   let finalPhotoTransform = null;
 
+  // Stage 3 variables
+  let recordedCreatorPosition = null;
+  let recordedCreatorQuaternion = null;
+  let recordViewpointBtn = null;
+  let skipViewpointBtn = null;
+  let completePlacementBtn = null;
+  let viewpointInstructionsElement = null;
+  
   // Fine adjustment constants and variables
   const ADJUST_STEP = 0.05; // Position adjustment step (in meters/units)
   const ROTATION_STEP = Math.PI / 36; // Rotation adjustment step (5 degrees)
@@ -596,6 +602,28 @@ window.addEventListener('DOMContentLoaded', () => {
         aspectRatio: finalAspectRatio
       };
       
+      // Add creator viewpoint data if available
+      if (metadata.creatorViewpointPosition_x !== undefined) {
+        pinnedPhotoMesh.userData.creatorViewpoint = {
+          position: {
+            x: metadata.creatorViewpointPosition_x,
+            y: metadata.creatorViewpointPosition_y,
+            z: metadata.creatorViewpointPosition_z
+          }
+        };
+        
+        if (metadata.creatorViewpointQuaternion_x !== undefined) {
+          pinnedPhotoMesh.userData.creatorViewpoint.quaternion = {
+            x: metadata.creatorViewpointQuaternion_x,
+            y: metadata.creatorViewpointQuaternion_y,
+            z: metadata.creatorViewpointQuaternion_z,
+            w: metadata.creatorViewpointQuaternion_w
+          };
+        }
+        
+        console.log(`Restored creator viewpoint for imageId: ${metadata.imageId}`, pinnedPhotoMesh.userData.creatorViewpoint);
+      }
+      
       // Add to scene
       scene.add(pinnedPhotoMesh);
       console.log(`Photo mesh added to scene for imageId: ${metadata.imageId}`);
@@ -611,18 +639,24 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   // Update the existing createPhotoPlane function to save to DB
-  function createPhotoPlane(intersection) {
+  function createPhotoPlane(imageBlobToSave, photoTransform, creatorViewpoint, photoScale, photoAspectRatio) {
     // Validation and logging
-    if (!processedImageBlob) {
-      console.error('Cannot create photo plane: processedImageBlob is null');
+    if (!imageBlobToSave) {
+      console.error('Cannot create photo plane: imageBlobToSave is null');
       return;
     }
     
-    console.log(`Creating photo plane with image blob, size: ${processedImageBlob.size} bytes, type: ${processedImageBlob.type}`);
-    console.log(`Using photo scale: ${currentPhotoScale}, aspect ratio: ${currentPreviewImageAspectRatio}`);
+    console.log(`Creating photo plane with image blob, size: ${imageBlobToSave.size} bytes, type: ${imageBlobToSave.type}`);
+    console.log(`Using photo scale: ${photoScale}, aspect ratio: ${photoAspectRatio}`);
+    
+    if (creatorViewpoint) {
+      console.log('Using creator viewpoint:', creatorViewpoint);
+    } else {
+      console.log('No creator viewpoint provided, photo will be created without viewpoint data');
+    }
     
     // Create a local copy of the blob to prevent issues with global state changes
-    const localImageBlob = processedImageBlob.slice(0, processedImageBlob.size, processedImageBlob.type);
+    const localImageBlob = imageBlobToSave.slice(0, imageBlobToSave.size, imageBlobToSave.type);
     console.log('Created local copy of blob in createPhotoPlane:', localImageBlob);
     
     // Get the image aspect ratio to create a properly sized plane
@@ -632,15 +666,13 @@ window.addEventListener('DOMContentLoaded', () => {
     
     const onImageLoad = () => {
       console.log(`Image loaded successfully, dimensions: ${img.width}x${img.height}`);
-      console.log('Inside onImageLoad, global processedImageBlob is:', processedImageBlob);
-      console.log('Inside onImageLoad, using local copy localImageBlob:', localImageBlob);
       
-      // Use the aspect ratio from the image or fall back to stored preview aspect ratio
-      const aspectRatio = img.width / img.height;
-      console.log(`Using aspect ratio: ${aspectRatio}, with scale: ${currentPhotoScale}`);
+      // Use the provided aspect ratio or calculate from the image
+      const aspectRatio = photoAspectRatio || img.width / img.height;
+      console.log(`Using aspect ratio: ${aspectRatio}, with scale: ${photoScale}`);
       
       // Calculate plane dimensions based on scale
-      const actualPlaneWidth = BASE_PHOTO_WIDTH * currentPhotoScale;
+      const actualPlaneWidth = BASE_PHOTO_WIDTH * photoScale;
       const actualPlaneHeight = actualPlaneWidth / aspectRatio;
       
       // Create geometry with the correct aspect ratio and scale
@@ -668,48 +700,10 @@ window.addEventListener('DOMContentLoaded', () => {
       // Create and position the photo mesh
       const pinnedPhotoMesh = new THREE.Mesh(planeGeo, planeMat);
       
-      // Position at intersection point
-      pinnedPhotoMesh.position.copy(intersection.point);
-      
-      // Transform local normal to world normal
-      const worldNormal = new THREE.Vector3();
-      worldNormal.copy(intersection.face.normal);
-      worldNormal.transformDirection(intersection.object.matrixWorld);
-      worldNormal.normalize();
-      
-      // Orient the mesh based on the surface normal
-      if (Math.abs(worldNormal.y) > 0.95) {
-        // STEP 1: Make it lie flat (absolute orientation)
-        // This makes the plane's normal align with world Y-axis
-        pinnedPhotoMesh.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0, 'YXZ'));
-        
-        // STEP 2: Rotate around world Y-axis to align with camera's horizontal view
-        // Get camera direction projected onto XZ plane (horizontal plane)
-        const cameraDirection = new THREE.Vector3();
-        camera.getWorldDirection(cameraDirection);
-        cameraDirection.y = 0; // Ignore vertical component
-        cameraDirection.normalize();
-        
-        // Calculate Y rotation to align with camera's horizontal direction
-        const alignWithCameraY = Math.atan2(cameraDirection.x, cameraDirection.z);
-        
-        // Apply Y rotation to the already flattened plane
-        // Create a rotation quaternion around world Y axis
-        const yRotationQuat = new THREE.Quaternion().setFromAxisAngle(
-          new THREE.Vector3(0, 1, 0), 
-          alignWithCameraY
-        );
-        
-        // Apply the Y rotation after flattening
-        pinnedPhotoMesh.quaternion.multiply(yRotationQuat);
-      } else {
-        // For walls and angled surfaces, use worldNormal instead of local normal
-        const lookAtTarget = intersection.point.clone().add(worldNormal);
-        pinnedPhotoMesh.lookAt(lookAtTarget);
-      }
-      
-      // Apply offset after orientation to prevent z-fighting, using worldNormal
-      pinnedPhotoMesh.position.addScaledVector(worldNormal, 0.01);
+      // Set position, orientation, and scale from photoTransform
+      pinnedPhotoMesh.position.copy(photoTransform.position);
+      pinnedPhotoMesh.quaternion.copy(photoTransform.quaternion);
+      pinnedPhotoMesh.scale.copy(photoTransform.scale);
       
       // Generate a unique image ID
       const imageId = `photo_${Date.now()}_${pinnedPhotoCounter++}`;
@@ -735,9 +729,31 @@ window.addEventListener('DOMContentLoaded', () => {
           y: pinnedPhotoMesh.scale.y,
           z: pinnedPhotoMesh.scale.z
         },
-        userScale: currentPhotoScale,
+        userScale: photoScale,
         aspectRatio: aspectRatio
       };
+      
+      // Add creator viewpoint data if available
+      if (creatorViewpoint && creatorViewpoint.position) {
+        pinnedPhotoMesh.userData.creatorViewpoint = {
+          position: {
+            x: creatorViewpoint.position.x,
+            y: creatorViewpoint.position.y,
+            z: creatorViewpoint.position.z
+          }
+        };
+        
+        if (creatorViewpoint.quaternion) {
+          pinnedPhotoMesh.userData.creatorViewpoint.quaternion = {
+            x: creatorViewpoint.quaternion.x,
+            y: creatorViewpoint.quaternion.y,
+            z: creatorViewpoint.quaternion.z,
+            w: creatorViewpoint.quaternion.w
+          };
+        }
+        
+        console.log(`Added creator viewpoint to userData for imageId: ${imageId}`);
+      }
       
       // Add to scene
       scene.add(pinnedPhotoMesh);
@@ -749,17 +765,28 @@ window.addEventListener('DOMContentLoaded', () => {
       const imageBlob = localImageBlob.slice(0, localImageBlob.size, localImageBlob.type);
       console.log('Created database-ready imageBlob:', imageBlob);
       
-      // Save to database with scale information
+      // Prepare transform data for database saving
+      const transformDataForDB = {
+        position: pinnedPhotoMesh.userData.position,
+        orientation: pinnedPhotoMesh.userData.orientation,
+        scale: pinnedPhotoMesh.userData.scale,
+        userScale: photoScale,
+        aspectRatio: aspectRatio
+      };
+      
+      // Add creator viewpoint if available
+      if (creatorViewpoint && creatorViewpoint.position) {
+        transformDataForDB.creatorViewpoint = {
+          position: { ...creatorViewpoint.position },
+          quaternion: creatorViewpoint.quaternion ? { ...creatorViewpoint.quaternion } : undefined
+        };
+      }
+      
+      // Save to database with scale information and viewpoint
       savePinnedItem(
         imageBlob, 
         imageId, 
-        {
-          position: pinnedPhotoMesh.userData.position,
-          orientation: pinnedPhotoMesh.userData.orientation,
-          scale: pinnedPhotoMesh.userData.scale,
-          userScale: currentPhotoScale,
-          aspectRatio: aspectRatio
-        }
+        transformDataForDB
       ).then(() => {
         console.log(`Photo saved to database successfully with imageId: ${imageId}`);
       }).catch(error => {
@@ -780,140 +807,30 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Handle showing/hiding preview plane during pinning mode
   function updatePreviewPlane(event) {
-    if (!pinningMode) return;
+    // This function is now only used for Stage 1 dynamic preview updates when the user is looking around
+    // The fixed positioning logic is handled in the animate() function
+    if (!pinningMode || currentPlacementStage !== 'initialPreview') return;
     
-    const raycaster = createRaycastFromEvent(event);
-    const intersects = raycaster.intersectObjects(intersectableObjects);
+    // Calculate preview dimensions based on scale and current aspect ratio
+    const previewWidth = BASE_PHOTO_WIDTH * currentPhotoScale;
+    const previewHeight = previewWidth / currentPreviewImageAspectRatio;
     
-    if (intersects.length > 0) {
-      const intersection = intersects[0];
-      
-      // Calculate preview dimensions based on scale and current aspect ratio
-      const previewWidth = BASE_PHOTO_WIDTH * currentPhotoScale;
-      const previewHeight = previewWidth / currentPreviewImageAspectRatio;
-      
-      // Check if we need to create a new preview plane or update an existing one
-      if (tempPreviewPlane) {
-        // If dimensions have changed, dispose of the old preview plane
-        const currentGeo = tempPreviewPlane.geometry;
-        if (currentGeo.parameters.width !== previewWidth || 
-            currentGeo.parameters.height !== previewHeight) {
-          console.log(`Recreating preview with new dimensions: ${previewWidth} x ${previewHeight}`);
-          scene.remove(tempPreviewPlane);
-          tempPreviewPlane.geometry.dispose();
-          tempPreviewPlane.material.dispose();
-          tempPreviewPlane = null;
-        }
+    // Check if we need to create a new preview plane or update an existing one
+    if (tempPreviewPlane) {
+      // If dimensions have changed, dispose of the old preview plane
+      const currentGeo = tempPreviewPlane.geometry;
+      if (currentGeo.parameters.width !== previewWidth || 
+          currentGeo.parameters.height !== previewHeight) {
+        console.log(`Recreating preview with new dimensions: ${previewWidth} x ${previewHeight}`);
+        scene.remove(tempPreviewPlane);
+        tempPreviewPlane.geometry.dispose();
+        tempPreviewPlane.material.dispose();
+        tempPreviewPlane = null;
       }
-      
-      // Create preview plane if it doesn't exist
-      if (!tempPreviewPlane) {
-        const previewGeo = new THREE.PlaneGeometry(previewWidth, previewHeight);
-        // Use MeshBasicMaterial for consistent visualization with the final pinned image
-        const previewMat = new THREE.MeshBasicMaterial({
-          color: 0x00ff00,
-          wireframe: true,
-          transparent: true,
-          opacity: 0.5,
-          side: THREE.DoubleSide
-        });
-        tempPreviewPlane = new THREE.Mesh(previewGeo, previewMat);
-        scene.add(tempPreviewPlane);
-        console.log(`Created preview plane with dimensions: ${previewWidth} x ${previewHeight}`);
-      }
-      
-      // Position the preview plane
-      tempPreviewPlane.position.copy(intersection.point);
-      
-      // Transform local normal to world normal
-      const worldNormal = new THREE.Vector3();
-      worldNormal.copy(intersection.face.normal);
-      worldNormal.transformDirection(intersection.object.matrixWorld);
-      worldNormal.normalize();
-      
-      // Orient the preview plane - match createPhotoPlane exactly
-      if (Math.abs(worldNormal.y) > 0.95) {
-        // STEP 1: Make it lie flat (absolute orientation)
-        // This makes the plane's normal align with world Y-axis
-        tempPreviewPlane.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0, 'YXZ'));
-        
-        // STEP 2: Rotate around world Y-axis to align with camera's horizontal view
-        // Get camera direction projected onto XZ plane (horizontal plane)
-        const cameraDirection = new THREE.Vector3();
-        camera.getWorldDirection(cameraDirection);
-        cameraDirection.y = 0; // Ignore vertical component
-        cameraDirection.normalize();
-        
-        // Calculate Y rotation to align with camera's horizontal direction
-        const alignWithCameraY = Math.atan2(cameraDirection.x, cameraDirection.z);
-        
-        // Apply Y rotation to the already flattened plane
-        // Create a rotation quaternion around world Y axis
-        const yRotationQuat = new THREE.Quaternion().setFromAxisAngle(
-          new THREE.Vector3(0, 1, 0), 
-          alignWithCameraY
-        );
-        
-        // Apply the Y rotation after flattening
-        tempPreviewPlane.quaternion.multiply(yRotationQuat);
-      } else {
-        // For walls and angled surfaces, use worldNormal instead of local normal
-        const lookAtTarget = intersection.point.clone().add(worldNormal);
-        tempPreviewPlane.lookAt(lookAtTarget);
-      }
-      
-      // Add offset after orientation using worldNormal
-      tempPreviewPlane.position.addScaledVector(worldNormal, 0.01);
-      tempPreviewPlane.visible = true;
-    } else if (tempPreviewPlane) {
-      tempPreviewPlane.visible = false;
-    }
-  }
-
-  // Create or get confirm pin button
-  function getConfirmPinButton() {
-    if (!confirmPinButton) {
-      confirmPinButton = document.createElement('button');
-      confirmPinButton.id = 'confirmPinBtn';
-      confirmPinButton.textContent = 'Confirm Pin';
-      confirmPinButton.style.position = 'fixed';
-      confirmPinButton.style.bottom = '100px';
-      confirmPinButton.style.left = '50%';
-      confirmPinButton.style.transform = 'translateX(-50%)';
-      confirmPinButton.style.background = 'rgba(0, 180, 0, 0.8)';
-      confirmPinButton.style.color = 'white';
-      confirmPinButton.style.padding = '12px 24px';
-      confirmPinButton.style.borderRadius = '24px';
-      confirmPinButton.style.border = 'none';
-      confirmPinButton.style.zIndex = '100';
-      confirmPinButton.style.display = 'none';
-      confirmPinButton.style.fontWeight = 'bold';
-      confirmPinButton.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
-      
-      document.body.appendChild(confirmPinButton);
-      
-      confirmPinButton.addEventListener('click', () => {
-        if (selectedPinningPosition) {
-          console.log('Confirm button clicked, before createPhotoPlane processedImageBlob is:', processedImageBlob);
-          
-          // Create permanent photo using selected position
-          createPhotoPlane(selectedPinningPosition);
-          
-          // Exit pinning mode
-          togglePinningMode(false);
-          
-          // Store a reference to current image before clearing
-          const currentBlob = processedImageBlob;
-          console.log('After createPhotoPlane, about to set processedImageBlob to null. Current value:', currentBlob);
-          
-          // Disable pin button until a new photo is selected - SETTING NULL AFTER createPhotoPlane executed
-          processedImageBlob = null;
-          updatePinButtonState();
-        }
-      });
     }
     
-    return confirmPinButton;
+    // The rest of the preview positioning is handled in the animate() loop
+    // which positions the preview plane in front of the camera
   }
 
   // Create confirm initial position button for stage 1
@@ -921,7 +838,7 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!confirmInitialPosBtn) {
       confirmInitialPosBtn = document.createElement('button');
       confirmInitialPosBtn.id = 'confirmInitialPosBtn';
-      confirmInitialPosBtn.textContent = '移动到理想位置后点击确认';
+      confirmInitialPosBtn.textContent = 'Move to the desired position and click to confirm';
       confirmInitialPosBtn.style.position = 'fixed';
       confirmInitialPosBtn.style.bottom = '100px';
       confirmInitialPosBtn.style.left = '50%';
@@ -1155,9 +1072,8 @@ window.addEventListener('DOMContentLoaded', () => {
         // Hide stage 2 panel
         fineAdjustmentPanel.style.display = 'none';
         
-        // Placeholder for Stage 3 entrance
-        console.log('Stage 3 implementation pending');
-        // enterSetViewpointStage(); // To be implemented in next prompt
+        // Enter Stage 3
+        enterSetViewpointStage();
       }
     });
     
@@ -1174,15 +1090,10 @@ window.addEventListener('DOMContentLoaded', () => {
   // Enter or exit pinning mode
   function togglePinningMode(enter) {
     pinningMode = enter;
-    selectedPinningPosition = null;
     
     if (enter) {
       addContentBtn.innerHTML = '<span class="material-symbols-outlined">cancel</span>';
       addContentBtn.setAttribute('data-mode', 'pinning');
-      
-      // Hide old confirmation button
-      const confirmBtn = getConfirmPinButton();
-      confirmBtn.style.display = 'none';
       
       // Remove old helper message if it exists
       const oldHelpMsg = document.getElementById('pinning-helper');
@@ -1197,10 +1108,15 @@ window.addEventListener('DOMContentLoaded', () => {
       currentPlacementStage = 'none';
       
       // Hide all stage-related UI
-      if (confirmPinButton) confirmPinButton.style.display = 'none';
       if (confirmInitialPosBtn) confirmInitialPosBtn.style.display = 'none';
       if (stageIndicator) stageIndicator.style.display = 'none';
       if (fineAdjustmentPanel) fineAdjustmentPanel.style.display = 'none';
+      
+      // Hide Stage 3 UI elements
+      if (viewpointInstructionsElement) viewpointInstructionsElement.style.display = 'none';
+      if (recordViewpointBtn) recordViewpointBtn.style.display = 'none';
+      if (skipViewpointBtn) skipViewpointBtn.style.display = 'none';
+      if (completePlacementBtn) completePlacementBtn.style.display = 'none';
       
       // Also hide old container if it exists
       const oldControls = document.getElementById('fineAdjustmentControlsContainer');
@@ -1219,30 +1135,10 @@ window.addEventListener('DOMContentLoaded', () => {
       lockedInitialQuaternion = null;
       lockedInitialScale = null;
       finalPhotoTransform = null;
-    }
-  }
-
-  // Process raycast hit and select position for pin
-  function handlePinningClick(event) {
-    // Old raycast-based pinning logic, not used in the new flow
-    if (!pinningMode || !processedImageBlob || currentPlacementStage !== 'none') return;
-    
-    const raycaster = createRaycastFromEvent(event);
-    const intersects = raycaster.intersectObjects(intersectableObjects);
-    
-    if (intersects.length > 0) {
-      // Store the selected position for later use
-      selectedPinningPosition = intersects[0];
       
-      // Update helper message
-      const helpMsg = document.getElementById('pinning-helper');
-      if (helpMsg) {
-        helpMsg.textContent = 'Position selected. Click "Confirm Pin" to place your photo.';
-      }
-      
-      // Show confirm button
-      const confirmBtn = getConfirmPinButton();
-      confirmBtn.style.display = 'block';
+      // Clear Stage 3 variables
+      recordedCreatorPosition = null;
+      recordedCreatorQuaternion = null;
     }
   }
 
@@ -1445,7 +1341,6 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   // Add event listeners for pinning mode
-  renderer.domElement.addEventListener('click', handlePinningClick);
   renderer.domElement.addEventListener('pointermove', updatePreviewPlane);
 
   // Initialize panel state
@@ -1469,5 +1364,230 @@ window.addEventListener('DOMContentLoaded', () => {
       joystickDelta = { x: 0, y: 0 };
       joystickHandle.style.transform = 'translate(-50%, -50%)';
     });
+  }
+
+  // Function to create and show Stage 3 UI
+  function enterSetViewpointStage() {
+    console.log('Entering Stage 3: Set Creator Viewpoint');
+    
+    // Create viewpoint instructions element if it doesn't exist
+    if (!viewpointInstructionsElement) {
+      viewpointInstructionsElement = document.createElement('div');
+      viewpointInstructionsElement.id = 'viewpointInstructions';
+      viewpointInstructionsElement.style.position = 'fixed';
+      viewpointInstructionsElement.style.top = '70px'; // Below stage indicator
+      viewpointInstructionsElement.style.left = '50%';
+      viewpointInstructionsElement.style.transform = 'translateX(-50%)';
+      viewpointInstructionsElement.style.background = 'rgba(0, 0, 0, 0.7)';
+      viewpointInstructionsElement.style.color = 'white';
+      viewpointInstructionsElement.style.padding = '10px 16px';
+      viewpointInstructionsElement.style.borderRadius = '16px';
+      viewpointInstructionsElement.style.zIndex = '100';
+      viewpointInstructionsElement.style.maxWidth = '90%';
+      viewpointInstructionsElement.style.textAlign = 'center';
+      viewpointInstructionsElement.style.display = 'none';
+      viewpointInstructionsElement.textContent = 'Please move to the best position you think to view this photo, then click "Record Viewpoint"';
+      
+      document.body.appendChild(viewpointInstructionsElement);
+    }
+    
+    // Create Record Viewpoint button if it doesn't exist
+    if (!recordViewpointBtn) {
+      recordViewpointBtn = document.createElement('button');
+      recordViewpointBtn.id = 'recordViewpointBtn';
+      recordViewpointBtn.textContent = 'Record Viewpoint';
+      recordViewpointBtn.style.position = 'fixed';
+      recordViewpointBtn.style.bottom = '160px'; // Stack buttons vertically
+      recordViewpointBtn.style.left = '50%';
+      recordViewpointBtn.style.transform = 'translateX(-50%)';
+      recordViewpointBtn.style.background = 'rgba(0, 120, 255, 0.8)';
+      recordViewpointBtn.style.color = 'white';
+      recordViewpointBtn.style.padding = '12px 24px';
+      recordViewpointBtn.style.borderRadius = '24px';
+      recordViewpointBtn.style.border = 'none';
+      recordViewpointBtn.style.zIndex = '100';
+      recordViewpointBtn.style.display = 'none';
+      recordViewpointBtn.style.fontWeight = 'bold';
+      recordViewpointBtn.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
+      
+      document.body.appendChild(recordViewpointBtn);
+      
+      recordViewpointBtn.addEventListener('click', recordViewpoint);
+    }
+    
+    // Create Skip Viewpoint button if it doesn't exist
+    if (!skipViewpointBtn) {
+      skipViewpointBtn = document.createElement('button');
+      skipViewpointBtn.id = 'skipViewpointBtn';
+      skipViewpointBtn.textContent = 'Skip Viewpoint Setup';
+      skipViewpointBtn.style.position = 'fixed';
+      skipViewpointBtn.style.bottom = '100px'; // Middle position
+      skipViewpointBtn.style.left = '50%';
+      skipViewpointBtn.style.transform = 'translateX(-50%)';
+      skipViewpointBtn.style.background = 'rgba(120, 120, 120, 0.8)';
+      skipViewpointBtn.style.color = 'white';
+      skipViewpointBtn.style.padding = '12px 24px';
+      skipViewpointBtn.style.borderRadius = '24px';
+      skipViewpointBtn.style.border = 'none';
+      skipViewpointBtn.style.zIndex = '100';
+      skipViewpointBtn.style.display = 'none';
+      skipViewpointBtn.style.fontWeight = 'bold';
+      skipViewpointBtn.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
+      
+      document.body.appendChild(skipViewpointBtn);
+      
+      skipViewpointBtn.addEventListener('click', skipViewpoint);
+    }
+    
+    // Create Complete Placement button if it doesn't exist
+    if (!completePlacementBtn) {
+      completePlacementBtn = document.createElement('button');
+      completePlacementBtn.id = 'completePlacementBtn';
+      completePlacementBtn.textContent = 'Complete';
+      completePlacementBtn.style.position = 'fixed';
+      completePlacementBtn.style.bottom = '40px'; // Bottom position
+      completePlacementBtn.style.left = '50%';
+      completePlacementBtn.style.transform = 'translateX(-50%)';
+      completePlacementBtn.style.background = 'rgba(0, 180, 0, 0.8)';
+      completePlacementBtn.style.color = 'white';
+      completePlacementBtn.style.padding = '12px 24px';
+      completePlacementBtn.style.borderRadius = '24px';
+      completePlacementBtn.style.border = 'none';
+      completePlacementBtn.style.zIndex = '100';
+      completePlacementBtn.style.display = 'none';
+      completePlacementBtn.style.fontWeight = 'bold';
+      completePlacementBtn.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
+      completePlacementBtn.style.opacity = '0.5'; // Initially less prominent
+      completePlacementBtn.disabled = true; // Initially disabled
+      
+      document.body.appendChild(completePlacementBtn);
+      
+      completePlacementBtn.addEventListener('click', completePlacement);
+    }
+    
+    // Reset viewpoint recording state
+    recordedCreatorPosition = null;
+    recordedCreatorQuaternion = null;
+    
+    // Show the Stage 3 UI elements
+    viewpointInstructionsElement.style.display = 'block';
+    recordViewpointBtn.style.display = 'block';
+    skipViewpointBtn.style.display = 'block';
+    completePlacementBtn.style.display = 'block';
+  }
+
+  // Function to record viewpoint (camera position and orientation)
+  function recordViewpoint() {
+    console.log('Recording creator viewpoint');
+    
+    // Store camera position and orientation
+    recordedCreatorPosition = camera.position.clone();
+    recordedCreatorQuaternion = camera.quaternion.clone();
+    
+    console.log('Recorded position:', recordedCreatorPosition);
+    console.log('Recorded quaternion:', recordedCreatorQuaternion);
+    
+    // Update UI
+    recordViewpointBtn.textContent = 'Viewpoint Recorded';
+    recordViewpointBtn.disabled = true;
+    recordViewpointBtn.style.background = 'rgba(0, 180, 0, 0.8)'; // Success color
+    
+    skipViewpointBtn.disabled = true;
+    skipViewpointBtn.style.opacity = '0.5';
+    
+    // Enable the complete button
+    completePlacementBtn.disabled = false;
+    completePlacementBtn.style.opacity = '1';
+    
+    // Update instructions
+    viewpointInstructionsElement.textContent = 'Viewpoint recorded, click "Complete" to create photo';
+  }
+
+  // Function to skip viewpoint recording
+  function skipViewpoint() {
+    console.log('Skipping creator viewpoint');
+    
+    // Clear any recorded viewpoint
+    recordedCreatorPosition = null;
+    recordedCreatorQuaternion = null;
+    
+    // Update UI
+    recordViewpointBtn.disabled = true;
+    recordViewpointBtn.style.opacity = '0.5';
+    
+    skipViewpointBtn.textContent = 'Skipped Viewpoint Setup';
+    skipViewpointBtn.disabled = true;
+    skipViewpointBtn.style.background = 'rgba(0, 180, 0, 0.8)'; // Success color
+    
+    // Enable the complete button
+    completePlacementBtn.disabled = false;
+    completePlacementBtn.style.opacity = '1';
+    
+    // Update instructions
+    viewpointInstructionsElement.textContent = 'Viewpoint skipped, click "Complete" to create photo';
+  }
+
+  // Function to complete the placement process
+  function completePlacement() {
+    console.log('Completing photo placement');
+    
+    if (!finalPhotoTransform) {
+      console.error('finalPhotoTransform is null, cannot complete placement');
+      return;
+    }
+    
+    if (!processedImageBlob) {
+      console.error('processedImageBlob is null, cannot complete placement');
+      return;
+    }
+    
+    // Create creator viewpoint object if viewpoint was recorded
+    const creatorViewpoint = recordedCreatorPosition && recordedCreatorQuaternion ? 
+      { position: recordedCreatorPosition, quaternion: recordedCreatorQuaternion } : null;
+    
+    // Call the refactored createPhotoPlane
+    createPhotoPlane(
+      processedImageBlob,
+      finalPhotoTransform,
+      creatorViewpoint,
+      finalPhotoTransform.scale.x, // Use the scale from the transform
+      currentPreviewImageAspectRatio
+    );
+    
+    // Reset all state variables
+    pinningMode = false;
+    currentPlacementStage = 'none';
+    
+    // Clean up preview plane
+    if (tempPreviewPlane) {
+      scene.remove(tempPreviewPlane);
+      tempPreviewPlane.geometry.dispose();
+      tempPreviewPlane.material.dispose();
+      tempPreviewPlane = null;
+    }
+    
+    // Reset variables
+    processedImageBlob = null;
+    recordedCreatorPosition = null;
+    recordedCreatorQuaternion = null;
+    finalPhotoTransform = null;
+    lockedInitialPosition = null;
+    lockedInitialQuaternion = null;
+    lockedInitialScale = null;
+    
+    // Reset addContentBtn
+    if (addContentBtn) {
+      addContentBtn.innerHTML = '<span class="material-symbols-outlined">add</span>';
+      addContentBtn.removeAttribute('data-mode');
+    }
+    
+    // Hide Stage 3 UI elements
+    if (viewpointInstructionsElement) viewpointInstructionsElement.style.display = 'none';
+    if (recordViewpointBtn) recordViewpointBtn.style.display = 'none';
+    if (skipViewpointBtn) skipViewpointBtn.style.display = 'none';
+    if (completePlacementBtn) completePlacementBtn.style.display = 'none';
+    if (stageIndicator) stageIndicator.style.display = 'none';
+    
+    console.log('Photo placement completed and all state reset');
   }
 });
