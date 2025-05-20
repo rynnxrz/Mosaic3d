@@ -13,6 +13,39 @@ window.addEventListener('DOMContentLoaded', () => {
     console.log('Body touchstart detected');
   }, { passive: true });
   
+  // --- State Variables for UI and 3D Scene ---
+  // Photo pinning variables
+  let processedImageBlob = null;
+  let cameraStream = null;
+  let cameraFacingMode = 'environment';
+  let pinningMode = false;
+  let tempPreviewPlane = null;
+  let pinnedPhotoCounter = 0;
+  let selectedPinningPosition = null;
+  let confirmPinButton = null;
+  
+  // Photo scaling variables
+  let currentPhotoScale = 1.0;
+  let currentPreviewImageAspectRatio = 16/9; // Default fallback
+  const BASE_PHOTO_WIDTH = 1.0; // Base width for photos
+  
+  // Three-stage photo placement variables
+  let currentPlacementStage = 'none'; // 'none', 'initialPreview', 'fineAdjustment', 'setViewpoint'
+  let lockedInitialPosition = null;
+  let lockedInitialQuaternion = null;
+  let lockedInitialScale = null;
+  const FIXED_PREVIEW_DISTANCE = 2.5; // Distance in front of camera for initial preview
+  let confirmInitialPosBtn = null;
+  let stageIndicator = null;
+  let finalPhotoTransform = null;
+
+  // Fine adjustment constants and variables
+  const ADJUST_STEP = 0.05; // Position adjustment step (in meters/units)
+  const ROTATION_STEP = Math.PI / 36; // Rotation adjustment step (5 degrees)
+  let fineAdjustmentPanel = null;
+  let tabButtons = null;
+  let tabContents = null;
+  
   // --- UI Element Lookups with Null Checks ---
   function getEl(id) {
     const el = document.getElementById(id);
@@ -316,6 +349,20 @@ window.addEventListener('DOMContentLoaded', () => {
   // --- Animation loop ---
   function animate() {
     updateCamera();
+    
+    // Update preview plane position in initialPreview stage
+    if (pinningMode && currentPlacementStage === 'initialPreview' && tempPreviewPlane) {
+      // Get camera's forward direction
+      const direction = new THREE.Vector3();
+      camera.getWorldDirection(direction);
+      
+      // Position the preview plane in front of the camera
+      tempPreviewPlane.position.copy(camera.position).add(direction.multiplyScalar(FIXED_PREVIEW_DISTANCE));
+      
+      // Make the preview plane face the camera
+      tempPreviewPlane.quaternion.copy(camera.quaternion);
+    }
+    
     renderer.render(scene, camera);
     requestAnimationFrame(animate);
   }
@@ -347,19 +394,9 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- New Add Content Panel UI Logic ---
-  let processedImageBlob = null;
-  let cameraStream = null;
-  let cameraFacingMode = 'environment';
-  let pinningMode = false;
-  let tempPreviewPlane = null;
-  let pinnedPhotoCounter = 0;
-  let selectedPinningPosition = null;
-  let confirmPinButton = null;
-
-  // --- Photo Scaling Variables ---
-  let currentPhotoScale = 1.0;
-  let currentPreviewImageAspectRatio = 16/9; // Default fallback
-  const BASE_PHOTO_WIDTH = 1.0; // Base width for photos
+  // Remove duplicate declarations - these are now at the top of DOMContentLoaded
+  
+  // --- Animation loop ---
 
   // Helper: show only one view in the panel
   function showPanelView(viewId) {
@@ -879,6 +916,261 @@ window.addEventListener('DOMContentLoaded', () => {
     return confirmPinButton;
   }
 
+  // Create confirm initial position button for stage 1
+  function getConfirmInitialPosButton() {
+    if (!confirmInitialPosBtn) {
+      confirmInitialPosBtn = document.createElement('button');
+      confirmInitialPosBtn.id = 'confirmInitialPosBtn';
+      confirmInitialPosBtn.textContent = '移动到理想位置后点击确认';
+      confirmInitialPosBtn.style.position = 'fixed';
+      confirmInitialPosBtn.style.bottom = '100px';
+      confirmInitialPosBtn.style.left = '50%';
+      confirmInitialPosBtn.style.transform = 'translateX(-50%)';
+      confirmInitialPosBtn.style.background = 'rgba(0, 180, 0, 0.8)';
+      confirmInitialPosBtn.style.color = 'white';
+      confirmInitialPosBtn.style.padding = '12px 24px';
+      confirmInitialPosBtn.style.borderRadius = '24px';
+      confirmInitialPosBtn.style.border = 'none';
+      confirmInitialPosBtn.style.zIndex = '100';
+      confirmInitialPosBtn.style.display = 'none';
+      confirmInitialPosBtn.style.fontWeight = 'bold';
+      confirmInitialPosBtn.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
+      
+      document.body.appendChild(confirmInitialPosBtn);
+      
+      confirmInitialPosBtn.addEventListener('click', () => {
+        if (currentPlacementStage === 'initialPreview' && tempPreviewPlane) {
+          // Store the current transform
+          lockedInitialPosition = tempPreviewPlane.position.clone();
+          lockedInitialQuaternion = tempPreviewPlane.quaternion.clone();
+          lockedInitialScale = tempPreviewPlane.scale.clone();
+          
+          // Move to stage 2
+          currentPlacementStage = 'fineAdjustment';
+          
+          // Log the stored transform and stage change
+          console.log('Initial position locked:', lockedInitialPosition);
+          console.log('Initial rotation locked:', lockedInitialQuaternion);
+          console.log('Initial scale locked:', lockedInitialScale);
+          console.log('Transitioning to stage 2: fineAdjustment');
+          
+          // Update the stage indicator
+          updateStageIndicator();
+          
+          // Hide stage 1 button
+          confirmInitialPosBtn.style.display = 'none';
+          
+          // Enter stage 2
+          enterFineAdjustmentStage();
+        }
+      });
+    }
+    
+    return confirmInitialPosBtn;
+  }
+
+  // Create stage indicator
+  function getStageIndicator() {
+    if (!stageIndicator) {
+      stageIndicator = document.createElement('div');
+      stageIndicator.id = 'stageIndicator';
+      stageIndicator.style.position = 'fixed';
+      stageIndicator.style.top = '20px';
+      stageIndicator.style.left = '50%';
+      stageIndicator.style.transform = 'translateX(-50%)';
+      stageIndicator.style.background = 'rgba(0, 0, 0, 0.7)';
+      stageIndicator.style.color = 'white';
+      stageIndicator.style.padding = '8px 16px';
+      stageIndicator.style.borderRadius = '16px';
+      stageIndicator.style.zIndex = '100';
+      stageIndicator.style.fontWeight = 'bold';
+      stageIndicator.style.display = 'none';
+      
+      document.body.appendChild(stageIndicator);
+    }
+    
+    return stageIndicator;
+  }
+
+  // Update stage indicator based on current stage
+  function updateStageIndicator() {
+    const indicator = getStageIndicator();
+    
+    switch (currentPlacementStage) {
+      case 'initialPreview':
+        indicator.textContent = 'Step 1/3: Initial Positioning';
+        indicator.style.display = 'block';
+        break;
+      case 'fineAdjustment':
+        indicator.textContent = 'Step 2/3: Fine Adjustments';
+        indicator.style.display = 'block';
+        break;
+      case 'setViewpoint':
+        indicator.textContent = 'Step 3/3: Set Creator Viewpoint';
+        indicator.style.display = 'block';
+        break;
+      default:
+        indicator.style.display = 'none';
+    }
+  }
+
+  // Function to setup tabs for the fine adjustment panel
+  function setupTabs() {
+    // Get all tab buttons and content panes
+    tabButtons = document.querySelectorAll('.tab-button');
+    tabContents = document.querySelectorAll('.tab-content');
+    
+    if (!tabButtons.length || !tabContents.length) {
+      console.error('Tab buttons or content elements not found');
+      return;
+    }
+    
+    // Add click event listeners to tab buttons
+    tabButtons.forEach(button => {
+      button.addEventListener('click', (event) => {
+        const tabId = event.target.dataset.tab;
+        
+        // Remove active class from all buttons and content panes
+        tabButtons.forEach(btn => btn.classList.remove('active-tab'));
+        tabContents.forEach(content => content.classList.remove('active-tab-content'));
+        
+        // Add active class to clicked button and corresponding content
+        event.target.classList.add('active-tab');
+        document.getElementById('tab' + tabId.charAt(0).toUpperCase() + tabId.slice(1)).classList.add('active-tab-content');
+      });
+    });
+  }
+
+  // Function to enter fine adjustment stage (Stage 2)
+  function enterFineAdjustmentStage() {
+    console.log('Entering fine adjustment stage');
+    
+    // Ensure tempPreviewPlane is correctly positioned from Stage 1
+    if (tempPreviewPlane && lockedInitialPosition && lockedInitialQuaternion && lockedInitialScale) {
+      tempPreviewPlane.position.copy(lockedInitialPosition);
+      tempPreviewPlane.quaternion.copy(lockedInitialQuaternion);
+      tempPreviewPlane.scale.copy(lockedInitialScale);
+    } else {
+      console.error('Missing required objects for fine adjustment stage');
+      return;
+    }
+    
+    // Get panel and its elements
+    fineAdjustmentPanel = document.getElementById('fineAdjustmentPanel');
+    
+    if (!fineAdjustmentPanel) {
+      console.error('Fine adjustment panel not found');
+      return;
+    }
+    
+    // Setup the tabbed interface
+    setupTabs();
+    
+    // Get references to all adjustment buttons
+    const adjustNegPitchBtn = document.getElementById('adjustNegPitchBtn');
+    const adjustPosPitchBtn = document.getElementById('adjustPosPitchBtn');
+    const adjustNegYawBtn = document.getElementById('adjustNegYawBtn');
+    const adjustPosYawBtn = document.getElementById('adjustPosYawBtn');
+    const adjustNegRollBtn = document.getElementById('adjustNegRollBtn');
+    const adjustPosRollBtn = document.getElementById('adjustPosRollBtn');
+    
+    const adjustScaleSlider = document.getElementById('adjustScaleSlider');
+    const adjustScaleValue = document.getElementById('adjustScaleValue');
+    
+    const alignToWallBtn = document.getElementById('alignToWallBtn');
+    const placeHorizontallyBtn = document.getElementById('placeHorizontallyBtn');
+    const goToSetViewpointBtn = document.getElementById('goToSetViewpointBtn');
+    
+    // Initialize scale slider with current scale
+    if (adjustScaleSlider && adjustScaleValue) {
+      adjustScaleSlider.value = currentPhotoScale;
+      adjustScaleValue.textContent = currentPhotoScale.toFixed(1) + 'x';
+    }
+    
+    // Add event listeners for rotation adjustment
+    if (adjustPosPitchBtn) adjustPosPitchBtn.addEventListener('click', () => {
+      tempPreviewPlane.rotateX(ROTATION_STEP);
+    });
+    if (adjustNegPitchBtn) adjustNegPitchBtn.addEventListener('click', () => {
+      tempPreviewPlane.rotateX(-ROTATION_STEP);
+    });
+    
+    // For Yaw, rotate around world Y axis
+    const worldY = new THREE.Vector3(0, 1, 0);
+    if (adjustPosYawBtn) adjustPosYawBtn.addEventListener('click', () => {
+      tempPreviewPlane.rotateOnWorldAxis(worldY, ROTATION_STEP);
+    });
+    if (adjustNegYawBtn) adjustNegYawBtn.addEventListener('click', () => {
+      tempPreviewPlane.rotateOnWorldAxis(worldY, -ROTATION_STEP);
+    });
+    
+    if (adjustPosRollBtn) adjustPosRollBtn.addEventListener('click', () => {
+      tempPreviewPlane.rotateZ(ROTATION_STEP);
+    });
+    if (adjustNegRollBtn) adjustNegRollBtn.addEventListener('click', () => {
+      tempPreviewPlane.rotateZ(-ROTATION_STEP);
+    });
+    
+    // Add event listener for scale adjustment
+    if (adjustScaleSlider) adjustScaleSlider.addEventListener('input', (e) => {
+      const newScale = parseFloat(e.target.value);
+      tempPreviewPlane.scale.set(newScale, newScale, newScale);
+      currentPhotoScale = newScale;
+      if (adjustScaleValue) adjustScaleValue.textContent = newScale.toFixed(1) + 'x';
+    });
+    
+    // Add event listeners for preset buttons
+    if (alignToWallBtn) alignToWallBtn.addEventListener('click', () => {
+      // Get camera's horizontal orientation (yaw) from its quaternion
+      const cameraEuler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+      // Reset pitch and roll, keep only yaw
+      tempPreviewPlane.rotation.set(0, cameraEuler.y, 0);
+    });
+    
+    if (placeHorizontallyBtn) placeHorizontallyBtn.addEventListener('click', () => {
+      // Set orientation to lay flat horizontally
+      tempPreviewPlane.rotation.set(-Math.PI / 2, 0, 0);
+    });
+    
+    // Add event listener for transition to Stage 3
+    if (goToSetViewpointBtn) goToSetViewpointBtn.addEventListener('click', () => {
+      if (currentPlacementStage === 'fineAdjustment' && tempPreviewPlane) {
+        // Store the final transform
+        finalPhotoTransform = {
+          position: tempPreviewPlane.position.clone(),
+          quaternion: tempPreviewPlane.quaternion.clone(),
+          scale: tempPreviewPlane.scale.clone()
+        };
+        
+        // Move to stage 3
+        currentPlacementStage = 'setViewpoint';
+        
+        // Log the stored transform and stage change
+        console.log('Final photo transform:', finalPhotoTransform);
+        console.log('Transitioning to stage 3: setViewpoint');
+        
+        // Update the stage indicator
+        updateStageIndicator();
+        
+        // Hide stage 2 panel
+        fineAdjustmentPanel.style.display = 'none';
+        
+        // Placeholder for Stage 3 entrance
+        console.log('Stage 3 implementation pending');
+        // enterSetViewpointStage(); // To be implemented in next prompt
+      }
+    });
+    
+    // Show the fine adjustment panel
+    fineAdjustmentPanel.style.display = 'flex';
+    
+    // Hide the old fine adjustment controls if they exist
+    const oldControls = document.getElementById('fineAdjustmentControlsContainer');
+    if (oldControls) {
+      oldControls.style.display = 'none';
+    }
+  }
+
   // Enter or exit pinning mode
   function togglePinningMode(enter) {
     pinningMode = enter;
@@ -888,32 +1180,31 @@ window.addEventListener('DOMContentLoaded', () => {
       addContentBtn.innerHTML = '<span class="material-symbols-outlined">cancel</span>';
       addContentBtn.setAttribute('data-mode', 'pinning');
       
-      // Hide confirm button initially
+      // Hide old confirmation button
       const confirmBtn = getConfirmPinButton();
       confirmBtn.style.display = 'none';
       
-      // Optionally show a helper message
-      const helpMsg = document.createElement('div');
-      helpMsg.id = 'pinning-helper';
-      helpMsg.textContent = 'Tap on a surface to position your photo';
-      helpMsg.style.position = 'fixed';
-      helpMsg.style.top = '20px';
-      helpMsg.style.left = '50%';
-      helpMsg.style.transform = 'translateX(-50%)';
-      helpMsg.style.background = 'rgba(0,0,0,0.7)';
-      helpMsg.style.color = 'white';
-      helpMsg.style.padding = '10px 20px';
-      helpMsg.style.borderRadius = '20px';
-      helpMsg.style.zIndex = '100';
-      document.body.appendChild(helpMsg);
+      // Remove old helper message if it exists
+      const oldHelpMsg = document.getElementById('pinning-helper');
+      if (oldHelpMsg) {
+        document.body.removeChild(oldHelpMsg);
+      }
     } else {
       addContentBtn.innerHTML = '<span class="material-symbols-outlined">add</span>';
       addContentBtn.removeAttribute('data-mode');
       
-      // Hide confirm button when exiting pinning mode
-      if (confirmPinButton) {
-        confirmPinButton.style.display = 'none';
-      }
+      // Reset placement stage
+      currentPlacementStage = 'none';
+      
+      // Hide all stage-related UI
+      if (confirmPinButton) confirmPinButton.style.display = 'none';
+      if (confirmInitialPosBtn) confirmInitialPosBtn.style.display = 'none';
+      if (stageIndicator) stageIndicator.style.display = 'none';
+      if (fineAdjustmentPanel) fineAdjustmentPanel.style.display = 'none';
+      
+      // Also hide old container if it exists
+      const oldControls = document.getElementById('fineAdjustmentControlsContainer');
+      if (oldControls) oldControls.style.display = 'none';
       
       // Remove the preview plane if it exists
       if (tempPreviewPlane) {
@@ -923,17 +1214,18 @@ window.addEventListener('DOMContentLoaded', () => {
         tempPreviewPlane = null;
       }
       
-      // Remove helper message if it exists
-      const helpMsg = document.getElementById('pinning-helper');
-      if (helpMsg) {
-        document.body.removeChild(helpMsg);
-      }
+      // Clear locked positions and transforms
+      lockedInitialPosition = null;
+      lockedInitialQuaternion = null;
+      lockedInitialScale = null;
+      finalPhotoTransform = null;
     }
   }
 
   // Process raycast hit and select position for pin
   function handlePinningClick(event) {
-    if (!pinningMode || !processedImageBlob) return;
+    // Old raycast-based pinning logic, not used in the new flow
+    if (!pinningMode || !processedImageBlob || currentPlacementStage !== 'none') return;
     
     const raycaster = createRaycastFromEvent(event);
     const intersects = raycaster.intersectObjects(intersectableObjects);
@@ -953,6 +1245,67 @@ window.addEventListener('DOMContentLoaded', () => {
       confirmBtn.style.display = 'block';
     }
   }
+
+  // Pin photo implementation
+  if (pinPhotoBtn) pinPhotoBtn.addEventListener('click', () => {
+    if (!processedImageBlob) {
+      alert('Please capture or select an image first.');
+      return;
+    }
+    
+    // Enter pinning mode with the new stage-based flow
+    togglePinningMode(true);
+    currentPlacementStage = 'initialPreview';
+    
+    // Remove any existing preview plane
+    if (tempPreviewPlane) {
+      scene.remove(tempPreviewPlane);
+      tempPreviewPlane.geometry.dispose();
+      tempPreviewPlane.material.dispose();
+      tempPreviewPlane = null;
+    }
+    
+    // Calculate dimensions based on scale and aspect ratio
+    const previewWidth = BASE_PHOTO_WIDTH * currentPhotoScale;
+    const previewHeight = previewWidth / currentPreviewImageAspectRatio;
+    
+    // Create a texture from the image blob
+    const blobUrl = URL.createObjectURL(processedImageBlob);
+    const texture = new THREE.TextureLoader().load(blobUrl, 
+      // onLoad callback
+      () => console.log('Preview texture loaded successfully'),
+      // onProgress callback (not used)
+      undefined,
+      // onError callback
+      (error) => console.error('Error loading preview texture:', error)
+    );
+    
+    // Create a semi-transparent preview plane with the image texture
+    const previewGeo = new THREE.PlaneGeometry(previewWidth, previewHeight);
+    const previewMat = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      opacity: 0.7,
+      side: THREE.DoubleSide
+    });
+    
+    tempPreviewPlane = new THREE.Mesh(previewGeo, previewMat);
+    scene.add(tempPreviewPlane);
+    console.log(`Created preview plane with dimensions: ${previewWidth} x ${previewHeight}`);
+    
+    // Show the stage indicator
+    updateStageIndicator();
+    
+    // Show the confirm initial position button
+    const confirmInitialBtn = getConfirmInitialPosButton();
+    confirmInitialBtn.style.display = 'block';
+    
+    // Hide the content panel
+    if (contentPanel) {
+      contentPanel.classList.remove('panel-active');
+      contentPanel.classList.remove('fullscreen-panel');
+    }
+  });
 
   // Photo type
   if (selectPhotoTypeBtn) selectPhotoTypeBtn.addEventListener('click', async () => {
@@ -1055,22 +1408,6 @@ window.addEventListener('DOMContentLoaded', () => {
       // Enable the pin button since we have an image
       updatePinButtonState();
     }, 'image/jpeg', 0.8);
-  });
-  // Pin photo implementation
-  if (pinPhotoBtn) pinPhotoBtn.addEventListener('click', () => {
-    if (!processedImageBlob) {
-      alert('Please capture or select an image first.');
-      return;
-    }
-    
-    // Enter pinning mode
-    togglePinningMode(true);
-    
-    // Hide the content panel
-    if (contentPanel) {
-      contentPanel.classList.remove('panel-active');
-      contentPanel.classList.remove('fullscreen-panel');
-    }
   });
   // Choose different
   if (chooseDifferentBtn) chooseDifferentBtn.addEventListener('click', () => {
