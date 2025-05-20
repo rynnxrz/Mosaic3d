@@ -170,35 +170,23 @@ window.addEventListener('DOMContentLoaded', () => {
   let joystickDelta = { x: 0, y: 0 };
 
   joystickBase.addEventListener('touchstart', e => {
-    console.log('Joystick touchstart');
     joystickActive = true;
     const rect = joystickBase.getBoundingClientRect();
     joystickCenter = {
       x: rect.left + rect.width / 2,
       y: rect.top + rect.height / 2
     };
-    console.log('Joystick center:', joystickCenter);
     if (e.touches.length > 0) {
-      console.log('Joystick touchstart position:', { 
-        x: e.touches[0].clientX, 
-        y: e.touches[0].clientY 
-      });
       updateJoystick(e.touches[0]);
     }
   }, { passive: false });
   joystickBase.addEventListener('touchmove', e => {
-    console.log('Joystick touchmove');
     if (joystickActive && e.touches.length > 0) {
-      console.log('Joystick touchmove position:', { 
-        x: e.touches[0].clientX, 
-        y: e.touches[0].clientY 
-      });
       updateJoystick(e.touches[0]);
     }
     e.preventDefault();
   }, { passive: false });
   joystickBase.addEventListener('touchend', e => {
-    console.log('Joystick touchend');
     joystickActive = false;
     joystickDelta = { x: 0, y: 0 };
     joystickHandle.style.transform = 'translate(-50%, -50%)';
@@ -214,9 +202,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const normX = Math.cos(angle) * dist / maxDist;
     const normY = Math.sin(angle) * dist / maxDist;
     
-    console.log('updateJoystick values:', { dx, dy, dist, angle, normX, normY });
     joystickDelta = { x: normX, y: normY };
-    console.log('Updated joystickDelta:', joystickDelta);
     
     joystickHandle.style.transform = `translate(-50%, -50%) translate(${normX * maxDist}px, ${normY * maxDist}px)`;
   }
@@ -301,16 +287,8 @@ window.addEventListener('DOMContentLoaded', () => {
 
     // --- Movement ---
     let move = new THREE.Vector3();
-    // Enhanced debugging for joystick movement
-    console.log('updateCamera: joystick state:', { 
-      active: joystickActive, 
-      delta: { x: joystickDelta.x, y: joystickDelta.y },
-      sensitivity: MOVE_SENSITIVITY
-    });
-    
     move.addScaledVector(forward, -joystickDelta.y * MOVE_SENSITIVITY);
     move.addScaledVector(right, -joystickDelta.x * MOVE_SENSITIVITY);
-    console.log('updateCamera: move vector:', { x: move.x, y: move.y, z: move.z });
     
     // Try to move, check collision
     const newPos = camera.position.clone().add(move);
@@ -323,11 +301,6 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     
     if (canMove) {
-      console.log('updateCamera: Moving to new position:', { 
-        x: newPos.x, 
-        y: newPos.y, 
-        z: newPos.z 
-      });
       camera.position.copy(newPos);
     }
 
