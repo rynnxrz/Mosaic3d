@@ -1,10 +1,18 @@
 import './style.css'
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { initDB, savePinnedItem, loadPinnedItems } from './database.js';
 
 window.addEventListener('DOMContentLoaded', () => {
   console.log('DOM fully loaded and parsed');
   console.log('Direct getElementById("canvas-container"):', document.getElementById('canvas-container'));
+  
+  // Test if touch events are being recognized
+  console.log('Touch events supported:', 'ontouchstart' in window);
+  document.body.addEventListener('touchstart', () => {
+    console.log('Body touchstart detected');
+  }, { passive: true });
+  
   // --- UI Element Lookups with Null Checks ---
   function getEl(id) {
     const el = document.getElementById(id);
@@ -32,6 +40,8 @@ window.addEventListener('DOMContentLoaded', () => {
   const imagePreview = getEl('imagePreview');
   const pinPhotoBtn = getEl('pinPhotoBtn');
   const chooseDifferentBtn = getEl('chooseDifferentBtn');
+  const photoScaleSlider = getEl('photoScaleSlider');
+  const photoScaleValue = getEl('photoScaleValue');
 
   if (!canvasContainer) {
     console.error('Error: #canvas-container not found in DOM.');
@@ -53,8 +63,8 @@ window.addEventListener('DOMContentLoaded', () => {
   // --- Configurable Sensitivity ---
   const MOVE_SENSITIVITY = 0.1; // Faster movement (was 0.05)
   const LOOK_SENSITIVITY = 0.3; // Increased look speed multiplier (was 0.15)
-  const CAMERA_HEIGHT = 5.5; // Camera Y position (eye level)
-  const CAMERA_COLLISION_RADIUS = 2.5; // Camera collision radius
+  const CAMERA_HEIGHT = 1.9; // Camera Y position (eye level in meters)
+  const CAMERA_COLLISION_RADIUS = 0.01; // Camera collision radius (reduced from 2.5)
 
   // --- Three.js 3D Scene Setup ---
   const scene = new THREE.Scene();
@@ -64,11 +74,12 @@ window.addEventListener('DOMContentLoaded', () => {
     0.1,
     1000
   );
-  camera.position.set(0, 15, 30);
-  camera.lookAt(0, 0, 0);
+  camera.position.set(3, CAMERA_HEIGHT, 20); // Start at a sensible position inside the room
+  camera.lookAt(0, CAMERA_HEIGHT, 0); // Look forward at eye level
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setClearColor(0xf0f0f0);
+  renderer.colorSpace = THREE.SRGBColorSpace; // Set renderer color space for correct PBR material rendering
   resizeRenderer();
   canvasContainer.appendChild(renderer.domElement);
 
@@ -77,30 +88,81 @@ window.addEventListener('DOMContentLoaded', () => {
   scene.add(ambientLight);
   const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
   dirLight.position.set(10, 20, 10);
+  dirLight.castShadow = true; // Enable shadows for directional light
   scene.add(dirLight);
 
-  // Ground (whitebox)
-  const groundGeo = new THREE.PlaneGeometry(100, 100);
-  const groundMat = new THREE.MeshPhongMaterial({ color: 0xffffff });
-  const ground = new THREE.Mesh(groundGeo, groundMat);
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = 0;
-  ground.receiveShadow = true;
-  scene.add(ground);
+  // Declare global variable to store the loaded model
+  let loadedRoomModel;
+  
+  // Initialize empty arrays for collidables and intersectableObjects
+  let collidables = [];
+  let intersectableObjects = [];
 
-  // Walls/Obstacles (3 cubes)
-  const wallMat = new THREE.MeshPhongMaterial({ color: 0xb0b0b0 });
-  const cubeGeo = new THREE.BoxGeometry(5, 10, 1);
-  const wall1 = new THREE.Mesh(cubeGeo, wallMat);
-  wall1.position.set(-20, 5, 0);
-  scene.add(wall1);
-  const wall2 = new THREE.Mesh(cubeGeo, wallMat);
-  wall2.position.set(0, 5, -20);
-  wall2.rotation.y = Math.PI / 2;
-  scene.add(wall2);
-  const wall3 = new THREE.Mesh(cubeGeo, wallMat);
-  wall3.position.set(20, 5, 10);
-  scene.add(wall3);
+  // Load RoomPlan model
+  const loader = new GLTFLoader();
+  loader.load(
+    `${import.meta.env.BASE_URL}assets/room_model.glb`,
+    function (gltf) {
+      // Assign the loaded model to the global variable
+      loadedRoomModel = gltf.scene;
+      
+      // Add the model to the scene
+      scene.add(loadedRoomModel);
+      
+      // Log for inspection
+      console.log('Loaded RoomPlan model:', gltf);
+      console.log('RoomPlan model scene structure:', loadedRoomModel);
+      
+      // Enable shadows on model meshes and identify Wall2
+      loadedRoomModel.traverse(function (child) {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+          
+          // TEMPORARY: Identify "Wall2"
+          if (child.name === 'Wall2' || child.name.includes('Wall2')) {
+            console.log('Found Wall2 for visual test:', child);
+            console.log('Wall2 UUID:', child.uuid);
+            console.log('Wall2 Bounding Box:', new THREE.Box3().setFromObject(child));
+            
+            // Option A: Make it bright red
+            child.material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            
+            // Option B: Make it invisible (uncomment to see if you can pass through its space)
+            // child.visible = false;
+          }
+        }
+      });
+      
+      // Clear and populate collidables
+      collidables = []; // Clear previous
+      if (loadedRoomModel) {
+        loadedRoomModel.traverse(function (child) {
+          if (child.isMesh) {
+            // Filter out Wall2 from collidables to allow movement through the glass wall
+            if (child.name !== 'Wall2' && !child.name.includes('Wall2')) {
+              collidables.push(child);
+            } else {
+              console.log('Excluding mesh from collidables:', child.name, child.uuid);
+            }
+          }
+        });
+      }
+      console.log('Updated collidables (Wall2 excluded):', collidables);
+      console.log('Updated collidables for navigation:', collidables);
+      
+      // Clear and populate intersectableObjects
+      intersectableObjects = []; // Clear previous
+      if (loadedRoomModel) {
+        intersectableObjects.push(loadedRoomModel); // Add the whole model group
+      }
+      console.log('Updated intersectableObjects for photo-pinning:', intersectableObjects);
+    },
+    undefined, // onProgress callback
+    function (error) {
+      console.error('Error loading GLTF model:', error);
+    }
+  );
 
   // --- Virtual Joystick State ---
   let joystickActive = false;
@@ -108,23 +170,35 @@ window.addEventListener('DOMContentLoaded', () => {
   let joystickDelta = { x: 0, y: 0 };
 
   joystickBase.addEventListener('touchstart', e => {
+    console.log('Joystick touchstart');
     joystickActive = true;
     const rect = joystickBase.getBoundingClientRect();
     joystickCenter = {
       x: rect.left + rect.width / 2,
       y: rect.top + rect.height / 2
     };
+    console.log('Joystick center:', joystickCenter);
     if (e.touches.length > 0) {
+      console.log('Joystick touchstart position:', { 
+        x: e.touches[0].clientX, 
+        y: e.touches[0].clientY 
+      });
       updateJoystick(e.touches[0]);
     }
   }, { passive: false });
   joystickBase.addEventListener('touchmove', e => {
+    console.log('Joystick touchmove');
     if (joystickActive && e.touches.length > 0) {
+      console.log('Joystick touchmove position:', { 
+        x: e.touches[0].clientX, 
+        y: e.touches[0].clientY 
+      });
       updateJoystick(e.touches[0]);
     }
     e.preventDefault();
   }, { passive: false });
   joystickBase.addEventListener('touchend', e => {
+    console.log('Joystick touchend');
     joystickActive = false;
     joystickDelta = { x: 0, y: 0 };
     joystickHandle.style.transform = 'translate(-50%, -50%)';
@@ -139,7 +213,11 @@ window.addEventListener('DOMContentLoaded', () => {
     if (dist > maxDist) dist = maxDist;
     const normX = Math.cos(angle) * dist / maxDist;
     const normY = Math.sin(angle) * dist / maxDist;
+    
+    console.log('updateJoystick values:', { dx, dy, dist, angle, normX, normY });
     joystickDelta = { x: normX, y: normY };
+    console.log('Updated joystickDelta:', joystickDelta);
+    
     joystickHandle.style.transform = `translate(-50%, -50%) translate(${normX * maxDist}px, ${normY * maxDist}px)`;
   }
 
@@ -173,18 +251,35 @@ window.addEventListener('DOMContentLoaded', () => {
   }, { passive: false });
 
   // --- Camera Movement & Look Integration ---
-  yaw = Math.atan2(camera.position.x, camera.position.z);
-  pitch = 0;
+  yaw = Math.atan2(camera.position.x, camera.position.z); // Calculate initial yaw based on camera position
+  pitch = 0; // Start with level look
   camera.position.y = CAMERA_HEIGHT;
 
   function tryMoveCamera(newPos) {
-    // Simple collision: check against wall bounding boxes
-    const collidables = [wall1, wall2, wall3];
+    // Simple collision: check against collidables
+    const isJoystickActiveAndMoving = joystickActive && (joystickDelta.x !== 0 || joystickDelta.y !== 0);
+    
     for (const mesh of collidables) {
-      const box = new THREE.Box3().setFromObject(mesh);
-      // Expand box by camera collision radius
-      box.expandByScalar(CAMERA_COLLISION_RADIUS);
-      if (box.containsPoint(new THREE.Vector3(newPos.x, CAMERA_HEIGHT, newPos.z))) {
+      const rawBox = new THREE.Box3().setFromObject(mesh); // Get raw box first
+      const expandedBox = rawBox.clone().expandByScalar(CAMERA_COLLISION_RADIUS); // Then expanded
+      
+      const checkPoint = new THREE.Vector3(newPos.x, CAMERA_HEIGHT, newPos.z);
+      
+      if (expandedBox.containsPoint(checkPoint)) {
+        if (isJoystickActiveAndMoving) { // Only log details if joystick is trying to move
+          console.log(
+            'COLLISION! Mesh Name:', mesh.name || mesh.uuid,
+            '| Raw Box Y: [', rawBox.min.y.toFixed(3), ',', rawBox.max.y.toFixed(3), ']',
+            '| Expanded Box Y: [', expandedBox.min.y.toFixed(3), ',', expandedBox.max.y.toFixed(3), ']',
+            '| Camera Check Point Y:', checkPoint.y.toFixed(3),
+            '| Collision Radius:', CAMERA_COLLISION_RADIUS
+          );
+          // Temporarily comment out these more verbose logs
+          // console.log('Colliding Mesh Object:', mesh);
+          // console.log('Raw BBox:', rawBox);
+          // console.log('Expanded BBox:', expandedBox);
+          // console.log('Camera Check Point:', checkPoint);
+        }
         return false; // Collision!
       }
     }
@@ -206,12 +301,33 @@ window.addEventListener('DOMContentLoaded', () => {
 
     // --- Movement ---
     let move = new THREE.Vector3();
+    // Enhanced debugging for joystick movement
+    console.log('updateCamera: joystick state:', { 
+      active: joystickActive, 
+      delta: { x: joystickDelta.x, y: joystickDelta.y },
+      sensitivity: MOVE_SENSITIVITY
+    });
+    
     move.addScaledVector(forward, -joystickDelta.y * MOVE_SENSITIVITY);
     move.addScaledVector(right, -joystickDelta.x * MOVE_SENSITIVITY);
+    console.log('updateCamera: move vector:', { x: move.x, y: move.y, z: move.z });
+    
     // Try to move, check collision
     const newPos = camera.position.clone().add(move);
     newPos.y = CAMERA_HEIGHT;
-    if (tryMoveCamera(newPos)) {
+    
+    const canMove = tryMoveCamera(newPos);
+    
+    if (!canMove && (joystickActive && (joystickDelta.x !== 0 || joystickDelta.y !== 0))) {
+      console.log('updateCamera: Movement blocked by collision.');
+    }
+    
+    if (canMove) {
+      console.log('updateCamera: Moving to new position:', { 
+        x: newPos.x, 
+        y: newPos.y, 
+        z: newPos.z 
+      });
       camera.position.copy(newPos);
     }
 
@@ -267,6 +383,11 @@ window.addEventListener('DOMContentLoaded', () => {
   let selectedPinningPosition = null;
   let confirmPinButton = null;
 
+  // --- Photo Scaling Variables ---
+  let currentPhotoScale = 1.0;
+  let currentPreviewImageAspectRatio = 16/9; // Default fallback
+  const BASE_PHOTO_WIDTH = 1.0; // Base width for photos
+
   // Helper: show only one view in the panel
   function showPanelView(viewId) {
     [contentTypeSelectView, cameraModeView, imagePreviewView].forEach(v => v && v.classList.remove('active'));
@@ -279,6 +400,12 @@ window.addEventListener('DOMContentLoaded', () => {
       } else {
         contentPanel.classList.remove('fullscreen-panel');
       }
+    }
+    
+    // If showing image preview, ensure the scale slider reflects the current scale
+    if (viewId === 'imagePreviewView' && photoScaleSlider && photoScaleValue) {
+      photoScaleSlider.value = currentPhotoScale;
+      photoScaleValue.textContent = currentPhotoScale.toFixed(1) + 'x';
     }
   }
   function openPanel() {
@@ -318,6 +445,40 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Event listener for photo scale slider
+  if (photoScaleSlider && photoScaleValue) {
+    photoScaleSlider.value = currentPhotoScale; // Initialize slider position
+    photoScaleValue.textContent = currentPhotoScale.toFixed(1) + 'x'; // Initialize text
+    
+    photoScaleSlider.addEventListener('input', (e) => {
+      currentPhotoScale = parseFloat(e.target.value);
+      photoScaleValue.textContent = currentPhotoScale.toFixed(1) + 'x';
+
+      // If tempPreviewPlane is active and we know the aspect ratio, update its geometry
+      if (tempPreviewPlane && currentPreviewImageAspectRatio > 0) {
+        const previewWidth = BASE_PHOTO_WIDTH * currentPhotoScale;
+        const previewHeight = previewWidth / currentPreviewImageAspectRatio;
+        if (tempPreviewPlane.geometry.parameters.width !== previewWidth || 
+            tempPreviewPlane.geometry.parameters.height !== previewHeight) {
+          tempPreviewPlane.geometry.dispose();
+          tempPreviewPlane.geometry = new THREE.PlaneGeometry(previewWidth, previewHeight);
+          
+          // Force update preview position if in pinning mode
+          if (pinningMode && tempPreviewPlane.visible) {
+            // Create a synthetic event to trigger updatePreviewPlane
+            const dummyEvent = new MouseEvent('pointermove', {
+              clientX: window.innerWidth / 2,
+              clientY: window.innerHeight / 2
+            });
+            updatePreviewPlane(dummyEvent);
+          }
+        }
+      }
+    });
+  } else {
+    console.error('Photo scale slider UI elements not found!'); // Help debug visibility
+  }
+
   // Raycast helper function
   function createRaycastFromEvent(event) {
     const rect = renderer.domElement.getBoundingClientRect();
@@ -354,11 +515,20 @@ window.addEventListener('DOMContentLoaded', () => {
     img.onload = () => {
       console.log(`Image loaded successfully for imageId: ${metadata.imageId}, dimensions: ${img.width}x${img.height}`);
       
-      const aspectRatio = img.width / img.height;
-      const planeWidth = 5;
-      const planeHeight = planeWidth / aspectRatio;
+      // Get user scale if available, otherwise default to 1.0
+      const userScale = metadata.userScale || 1.0;
       
-      // Create geometry with the correct aspect ratio
+      // Get saved aspect ratio or calculate from image
+      const imageAspectRatio = img.width / img.height;
+      const finalAspectRatio = metadata.aspectRatio || imageAspectRatio;
+      
+      console.log(`Recreating photo with scale: ${userScale}, aspect ratio: ${finalAspectRatio}`);
+      
+      // Calculate plane dimensions based on scale
+      const planeWidth = BASE_PHOTO_WIDTH * userScale;
+      const planeHeight = planeWidth / finalAspectRatio;
+      
+      // Create geometry with the correct aspect ratio and scale
       const planeGeo = new THREE.PlaneGeometry(planeWidth, planeHeight);
       
       // Create texture from the blob
@@ -411,7 +581,9 @@ window.addEventListener('DOMContentLoaded', () => {
         timestamp: metadata.timestamp,
         position: metadata.position,
         orientation: metadata.orientation,
-        scale: metadata.scale
+        scale: metadata.scale,
+        userScale: userScale,
+        aspectRatio: finalAspectRatio
       };
       
       // Add to scene
@@ -437,6 +609,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     
     console.log(`Creating photo plane with image blob, size: ${processedImageBlob.size} bytes, type: ${processedImageBlob.type}`);
+    console.log(`Using photo scale: ${currentPhotoScale}, aspect ratio: ${currentPreviewImageAspectRatio}`);
     
     // Create a local copy of the blob to prevent issues with global state changes
     const localImageBlob = processedImageBlob.slice(0, processedImageBlob.size, processedImageBlob.type);
@@ -452,12 +625,16 @@ window.addEventListener('DOMContentLoaded', () => {
       console.log('Inside onImageLoad, global processedImageBlob is:', processedImageBlob);
       console.log('Inside onImageLoad, using local copy localImageBlob:', localImageBlob);
       
+      // Use the aspect ratio from the image or fall back to stored preview aspect ratio
       const aspectRatio = img.width / img.height;
-      const planeWidth = 5;
-      const planeHeight = planeWidth / aspectRatio;
+      console.log(`Using aspect ratio: ${aspectRatio}, with scale: ${currentPhotoScale}`);
       
-      // Create geometry with the correct aspect ratio
-      const planeGeo = new THREE.PlaneGeometry(planeWidth, planeHeight);
+      // Calculate plane dimensions based on scale
+      const actualPlaneWidth = BASE_PHOTO_WIDTH * currentPhotoScale;
+      const actualPlaneHeight = actualPlaneWidth / aspectRatio;
+      
+      // Create geometry with the correct aspect ratio and scale
+      const planeGeo = new THREE.PlaneGeometry(actualPlaneWidth, actualPlaneHeight);
       
       // Create texture from the blob
       const texture = new THREE.TextureLoader().load(blobUrl, 
@@ -484,8 +661,14 @@ window.addEventListener('DOMContentLoaded', () => {
       // Position at intersection point
       pinnedPhotoMesh.position.copy(intersection.point);
       
+      // Transform local normal to world normal
+      const worldNormal = new THREE.Vector3();
+      worldNormal.copy(intersection.face.normal);
+      worldNormal.transformDirection(intersection.object.matrixWorld);
+      worldNormal.normalize();
+      
       // Orient the mesh based on the surface normal
-      if (Math.abs(intersection.face.normal.y) > 0.95) {
+      if (Math.abs(worldNormal.y) > 0.95) {
         // STEP 1: Make it lie flat (absolute orientation)
         // This makes the plane's normal align with world Y-axis
         pinnedPhotoMesh.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0, 'YXZ'));
@@ -510,14 +693,13 @@ window.addEventListener('DOMContentLoaded', () => {
         // Apply the Y rotation after flattening
         pinnedPhotoMesh.quaternion.multiply(yRotationQuat);
       } else {
-        // For walls and angled surfaces
-        pinnedPhotoMesh.lookAt(
-          intersection.point.clone().add(intersection.face.normal.clone().multiplyScalar(1.1))
-        );
+        // For walls and angled surfaces, use worldNormal instead of local normal
+        const lookAtTarget = intersection.point.clone().add(worldNormal);
+        pinnedPhotoMesh.lookAt(lookAtTarget);
       }
       
-      // Apply offset after orientation to prevent z-fighting
-      pinnedPhotoMesh.position.addScaledVector(intersection.face.normal, 0.01);
+      // Apply offset after orientation to prevent z-fighting, using worldNormal
+      pinnedPhotoMesh.position.addScaledVector(worldNormal, 0.01);
       
       // Generate a unique image ID
       const imageId = `photo_${Date.now()}_${pinnedPhotoCounter++}`;
@@ -542,7 +724,9 @@ window.addEventListener('DOMContentLoaded', () => {
           x: pinnedPhotoMesh.scale.x,
           y: pinnedPhotoMesh.scale.y,
           z: pinnedPhotoMesh.scale.z
-        }
+        },
+        userScale: currentPhotoScale,
+        aspectRatio: aspectRatio
       };
       
       // Add to scene
@@ -555,14 +739,16 @@ window.addEventListener('DOMContentLoaded', () => {
       const imageBlob = localImageBlob.slice(0, localImageBlob.size, localImageBlob.type);
       console.log('Created database-ready imageBlob:', imageBlob);
       
-      // Save to database
+      // Save to database with scale information
       savePinnedItem(
         imageBlob, 
         imageId, 
         {
           position: pinnedPhotoMesh.userData.position,
           orientation: pinnedPhotoMesh.userData.orientation,
-          scale: pinnedPhotoMesh.userData.scale
+          scale: pinnedPhotoMesh.userData.scale,
+          userScale: currentPhotoScale,
+          aspectRatio: aspectRatio
         }
       ).then(() => {
         console.log(`Photo saved to database successfully with imageId: ${imageId}`);
@@ -587,15 +773,32 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!pinningMode) return;
     
     const raycaster = createRaycastFromEvent(event);
-    const intersectableObjects = [ground, wall1, wall2, wall3];
     const intersects = raycaster.intersectObjects(intersectableObjects);
     
     if (intersects.length > 0) {
       const intersection = intersects[0];
       
+      // Calculate preview dimensions based on scale and current aspect ratio
+      const previewWidth = BASE_PHOTO_WIDTH * currentPhotoScale;
+      const previewHeight = previewWidth / currentPreviewImageAspectRatio;
+      
+      // Check if we need to create a new preview plane or update an existing one
+      if (tempPreviewPlane) {
+        // If dimensions have changed, dispose of the old preview plane
+        const currentGeo = tempPreviewPlane.geometry;
+        if (currentGeo.parameters.width !== previewWidth || 
+            currentGeo.parameters.height !== previewHeight) {
+          console.log(`Recreating preview with new dimensions: ${previewWidth} x ${previewHeight}`);
+          scene.remove(tempPreviewPlane);
+          tempPreviewPlane.geometry.dispose();
+          tempPreviewPlane.material.dispose();
+          tempPreviewPlane = null;
+        }
+      }
+      
       // Create preview plane if it doesn't exist
       if (!tempPreviewPlane) {
-        const previewGeo = new THREE.PlaneGeometry(5, 3);
+        const previewGeo = new THREE.PlaneGeometry(previewWidth, previewHeight);
         // Use MeshBasicMaterial for consistent visualization with the final pinned image
         const previewMat = new THREE.MeshBasicMaterial({
           color: 0x00ff00,
@@ -606,13 +809,20 @@ window.addEventListener('DOMContentLoaded', () => {
         });
         tempPreviewPlane = new THREE.Mesh(previewGeo, previewMat);
         scene.add(tempPreviewPlane);
+        console.log(`Created preview plane with dimensions: ${previewWidth} x ${previewHeight}`);
       }
       
       // Position the preview plane
       tempPreviewPlane.position.copy(intersection.point);
       
+      // Transform local normal to world normal
+      const worldNormal = new THREE.Vector3();
+      worldNormal.copy(intersection.face.normal);
+      worldNormal.transformDirection(intersection.object.matrixWorld);
+      worldNormal.normalize();
+      
       // Orient the preview plane - match createPhotoPlane exactly
-      if (Math.abs(intersection.face.normal.y) > 0.95) {
+      if (Math.abs(worldNormal.y) > 0.95) {
         // STEP 1: Make it lie flat (absolute orientation)
         // This makes the plane's normal align with world Y-axis
         tempPreviewPlane.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0, 'YXZ'));
@@ -637,14 +847,13 @@ window.addEventListener('DOMContentLoaded', () => {
         // Apply the Y rotation after flattening
         tempPreviewPlane.quaternion.multiply(yRotationQuat);
       } else {
-        // For walls and angled surfaces
-        tempPreviewPlane.lookAt(
-          intersection.point.clone().add(intersection.face.normal.clone().multiplyScalar(1.1))
-        );
+        // For walls and angled surfaces, use worldNormal instead of local normal
+        const lookAtTarget = intersection.point.clone().add(worldNormal);
+        tempPreviewPlane.lookAt(lookAtTarget);
       }
       
-      // Add offset after orientation
-      tempPreviewPlane.position.addScaledVector(intersection.face.normal, 0.01);
+      // Add offset after orientation using worldNormal
+      tempPreviewPlane.position.addScaledVector(worldNormal, 0.01);
       tempPreviewPlane.visible = true;
     } else if (tempPreviewPlane) {
       tempPreviewPlane.visible = false;
@@ -754,7 +963,6 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!pinningMode || !processedImageBlob) return;
     
     const raycaster = createRaycastFromEvent(event);
-    const intersectableObjects = [ground, wall1, wall2, wall3];
     const intersects = raycaster.intersectObjects(intersectableObjects);
     
     if (intersects.length > 0) {
@@ -817,6 +1025,18 @@ window.addEventListener('DOMContentLoaded', () => {
         const canvas = document.createElement('canvas');
         canvas.width = img.naturalWidth;
         canvas.height = img.naturalHeight;
+        
+        // Store the aspect ratio for later use
+        currentPreviewImageAspectRatio = img.naturalWidth / img.naturalHeight;
+        console.log(`Image loaded with aspect ratio: ${currentPreviewImageAspectRatio}`);
+        
+        // Reset photo scale to default when loading a new image
+        currentPhotoScale = 1.0;
+        if (photoScaleSlider && photoScaleValue) {
+          photoScaleSlider.value = currentPhotoScale;
+          photoScaleValue.textContent = currentPhotoScale.toFixed(1) + 'x';
+        }
+        
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         canvas.toBlob(blob => {
@@ -839,6 +1059,18 @@ window.addEventListener('DOMContentLoaded', () => {
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
+    
+    // Store the aspect ratio for later use
+    currentPreviewImageAspectRatio = canvas.width / canvas.height;
+    console.log(`Camera capture with aspect ratio: ${currentPreviewImageAspectRatio}`);
+    
+    // Reset photo scale to default when capturing a new image
+    currentPhotoScale = 1.0;
+    if (photoScaleSlider && photoScaleValue) {
+      photoScaleSlider.value = currentPhotoScale;
+      photoScaleValue.textContent = currentPhotoScale.toFixed(1) + 'x';
+    }
+    
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     canvas.toBlob(blob => {
@@ -871,6 +1103,15 @@ window.addEventListener('DOMContentLoaded', () => {
   if (chooseDifferentBtn) chooseDifferentBtn.addEventListener('click', () => {
     processedImageBlob = null;
     imagePreview.src = '';
+    
+    // Reset photo scale to default
+    currentPhotoScale = 1.0;
+    currentPreviewImageAspectRatio = 16/9;
+    if (photoScaleSlider && photoScaleValue) {
+      photoScaleSlider.value = currentPhotoScale;
+      photoScaleValue.textContent = currentPhotoScale.toFixed(1) + 'x';
+    }
+    
     showPanelView('contentTypeSelectView');
     // Disable pin button since we no longer have an image
     updatePinButtonState();
@@ -901,6 +1142,16 @@ window.addEventListener('DOMContentLoaded', () => {
   closePanel();
   // Initial pin button state
   updatePinButtonState();
+
+  // Prevent context menu on long press for relevant elements
+  const elementsToBlockContextMenu = [canvasContainer, lookArea, joystickBase, contentPanel, imagePreviewView];
+  elementsToBlockContextMenu.forEach(el => {
+    if (el) {
+      el.addEventListener('contextmenu', function(e) {
+        // e.preventDefault(); // Temporarily comment this out to re-enable inspect
+      });
+    }
+  });
 
   // Joystick handle reset on touchend (ensure centering)
   if (joystickBase && joystickHandle) {

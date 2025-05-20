@@ -6,6 +6,7 @@ const ASSETS_TO_CACHE = [
   './vite.svg',
   './icon-192.png',
   './icon-512.png',
+  './assets/room_model.glb', // Add the 3D model to the cache
   // Add hashed JS/CSS bundles after build if not using automated precaching
   // e.g. './assets/index-abcd1234.js'
 ];

@@ -31,6 +31,15 @@ html, body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
+/* Prevent long-press context menu on UI elements */
+body, #canvas-container, #look-area, #joystick-base, #joystick-handle, #contentPanel, #imagePreviewView {
+  -webkit-user-select: none; /* Safari */
+  -moz-user-select: none; /* Firefox */
+  -ms-user-select: none; /* IE/Edge */
+  user-select: none; /* Standard */
+  -webkit-touch-callout: none; /* iOS Safari */
+}
+
 body {
   /* Remove flex and centering for fullscreen 3D app */
   min-width: 0;

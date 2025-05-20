@@ -1,14 +1,15 @@
+// vite.config.js
 import { defineConfig } from 'vite';
-import basicSsl from '@vitejs/plugin-basic-ssl'; // You might not need this if ngrok handles HTTPS
+import basicSsl from '@vitejs/plugin-basic-ssl'; // 如果 ngrok 处理 HTTPS，可以注释掉这个
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
   base: '/mosaic3d/',
   plugins: [
-    // basicSsl(), // If ngrok handles HTTPS, you can comment this out for simplicity when using ngrok
+    // basicSsl(), // 如果 ngrok 处理 HTTPS，为了简单起见，在使用 ngrok 时可以注释掉这一行
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['vite.svg', 'icon-192.png', 'icon-512.png'], // Ensure these are relative to public
+      includeAssets: ['vite.svg', 'icon-192.png', 'icon-512.png'], // 确保这些路径相对于 public 文件夹
       manifest: {
         name: 'mod3d App',
         short_name: 'mod3d',
@@ -18,12 +19,12 @@ export default defineConfig({
         display: 'standalone',
         icons: [
           {
-            src: 'icon-192.png', // Relative to public
+            src: 'icon-192.png', // 相对于 public
             sizes: '192x192',
             type: 'image/png'
           },
           {
-            src: 'icon-512.png', // Relative to public
+            src: 'icon-512.png', // 相对于 public
             sizes: '512x512',
             type: 'image/png'
           }
@@ -33,17 +34,19 @@ export default defineConfig({
       }
     })
   ],
-  server: { // This is for `npm run dev`
+  server: { // 这个配置块用于 `npm run dev`
     host: true,
-    // https: true // If using basicSsl() for dev
+    // https: true // 如果你使用 basicSsl() 进行开发
+    allowedHosts: ['.ngrok-free.app'] // <--- 主要修改这里！使用方法一
   },
-  preview: { // <<--- ADD THIS SECTION (or modify if it exists)
-    host: true, // Allows access from network IPs (good for ngrok)
-    // https: true, // If you want `vite preview` itself to serve HTTPS (requires certs, can be complex)
-                  // Often not needed if ngrok provides the outer HTTPS layer.
+  preview: { // 这个配置块用于 `vite preview`
+    host: true,
     allowedHosts: [
-      'd53b-152-37-69-194.ngrok-free.app' // <<--- ADD YOUR NGROK HOSTNAME HERE
-      // You can also add 'localhost', or other specific IPs if needed
+      // 你可以保留之前的特定 ngrok 域名，或者也改成通用的设置
+      // '770b-152-37-69-194.ngrok-free.app', // 这是你之前为 preview 添加的特定 ngrok 域名
+      '.ngrok-free.app' // <--- 如果你也希望 `vite preview` 通用，可以这样修改
     ]
+    // https: true, // 如果你希望 `vite preview` 本身也提供 HTTPS (需要证书，可能比较复杂)
+                  // 如果 ngrok 提供了外层的 HTTPS，这里通常不需要
   }
 });
