@@ -93,6 +93,7 @@ button {
   background-color: #1a1a1a;
   cursor: pointer;
   transition: border-color 0.25s;
+  touch-action: manipulation;
 }
 button:hover {
   border-color: #646cff;
