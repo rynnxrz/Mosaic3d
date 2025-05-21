@@ -506,20 +506,8 @@ window.addEventListener('DOMContentLoaded', () => {
     camera.updateProjectionMatrix();
   }
 
-  // Register service worker for PWA (keep this outside DOMContentLoaded if needed)
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register(`${import.meta.env.BASE_URL}service-worker.js`, {
-        scope: import.meta.env.BASE_URL
-      })
-        .then(reg => {
-          console.log('Service worker registered.', reg);
-        })
-        .catch(err => {
-          console.error('Service worker registration failed:', err);
-        });
-    });
-  }
+  // Service worker registration is handled by vite-plugin-pwa
+  // No manual registration needed
 
   // --- New Add Content Panel UI Logic ---
   // Remove duplicate declarations - these are now at the top of DOMContentLoaded

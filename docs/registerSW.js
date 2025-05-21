@@ -1,0 +1,1 @@
+if('serviceWorker' in navigator) {window.addEventListener('load', () => {navigator.serviceWorker.register('/mosaic3d/sw.js', { scope: '/mosaic3d/' })})}

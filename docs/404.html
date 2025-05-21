@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Redirecting...</title>
+  <script>
+    const baseSegment = '/mosaic3d/'; // Must match vite.config.js base
+    const fullPath = location.pathname;
+    const appPath = fullPath.startsWith(baseSegment) && baseSegment !== '/'
+                    ? fullPath.substring(baseSegment.length - 1)
+                    : fullPath;
+    sessionStorage.redirect = appPath;
+    // Preserve query parameters and hash
+    const redirectTarget = baseSegment + (location.search || '') + (location.hash || '');
+    location.replace(redirectTarget); // Use replace to avoid polluting history
+  </script>
+</head>
+<body>
+  <p>If you are not redirected automatically, please <a id="redirect-link" href="#">click here</a>.</p>
+  <script>document.getElementById('redirect-link').href = baseSegment;</script>
+</body>
+</html> 

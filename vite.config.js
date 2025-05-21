@@ -4,33 +4,61 @@ import basicSsl from '@vitejs/plugin-basic-ssl'; // 如果 ngrok 处理 HTTPS，
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
-  base: '/mosaic3d/',
+  base: '/',
   plugins: [
     // basicSsl(), // 如果 ngrok 处理 HTTPS，为了简单起见，在使用 ngrok 时可以注释掉这一行
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['vite.svg', 'icon-192.png', 'icon-512.png'], // 确保这些路径相对于 public 文件夹
+      strategies: 'generateSW', // Explicitly use generateSW strategy
+      includeAssets: [
+        'favicon.ico',
+        'icon-192.png', 
+        'icon-512.png',
+        'assets/room_model.glb'
+      ], // Important assets that should be precached
+      workbox: {
+        globPatterns: [
+          '**/*.{js,css,html,ico,png,svg,json}', // Automatically cache all important asset types
+        ],
+        // Add runtime caching for the 3D model with a CacheFirst strategy
+        runtimeCaching: [
+          {
+            urlPattern: /\.glb$/i, // Cache GLB models
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'model-cache',
+              expiration: {
+                maxEntries: 10, // Adjust based on your needs
+                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
+              }
+            }
+          }
+        ],
+      },
       manifest: {
-        name: 'mod3d App',
-        short_name: 'mod3d',
-        description: 'A 3D web app with PWA support.',
+        name: 'Mosaic3D App',
+        short_name: 'Mosaic3D',
+        description: 'A 3D web app for mosaic experiences with PWA support.',
         theme_color: '#18181C',
         background_color: '#ffffff',
         display: 'standalone',
         icons: [
           {
-            src: 'icon-192.png', // 相对于 public
+            src: 'icon-192.png', // Relative to public folder
             sizes: '192x192',
             type: 'image/png'
           },
           {
-            src: 'icon-512.png', // 相对于 public
+            src: 'icon-512.png', // Relative to public folder
             sizes: '512x512',
             type: 'image/png'
           }
         ],
-        start_url: '/mosaic3d/',
-        scope: '/mosaic3d/'
+        start_url: '/',
+        scope: '/'
       }
     })
   ],

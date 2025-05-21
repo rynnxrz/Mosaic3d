@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/mosaic3d/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Vite App</title>
+    <link rel="manifest" href="manifest.json" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <script>
+      // TEST SCRIPT 1: Runs very early
+      document.addEventListener('DOMContentLoaded', function() {
+        console.log('[Inline Script] DOMContentLoaded fired.');
+        const canvasContainerTest = document.getElementById('canvas-container');
+        console.log('[Inline Script] canvas-container from DOMContentLoaded:', canvasContainerTest);
+      });
+
+      // TEST SCRIPT 2: Attempts to run as HTML is parsed (might be too early for elements below)
+      // We'll add another test later if needed, but let's see what the DOMContentLoaded above does.
+    </script>
+    <script type="module" crossorigin src="/mosaic3d/assets/index-DqLiDKPs.js"></script>
+    <link rel="stylesheet" crossorigin href="/mosaic3d/assets/index-DsYmSSaJ.css">
+  <link rel="manifest" href="/mosaic3d/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/mosaic3d/registerSW.js"></script></head>
+  <body>
+    <!-- Intro Screen -->
+    <div id="intro-screen" class="intro-container">
+      <img src="/mosaic3d/vite.svg" alt="Mosaic Memories Logo" class="intro-logo">
+      <h1 class="intro-title">MOSAIC MEMORIES</h1>
+      <p class="intro-subtitle">Turn Your Space Into a Living Album</p>
+      
+      <div class="intro-illustration-placeholder">
+        <p style="text-align: center; color: #888; padding: 20px;">[Illustrative graphic of 3D space with pinned photos]</p>
+      </div>
+      
+      <ul class="intro-features">
+        <li>• Scan your space in 3D</li>
+        <li>• Pin photos to meaningful locations</li>
+        <li>• Explore memories as you move around</li>
+      </ul>
+      
+      <p class="intro-tagline">Create spatial stories that come alive when you're in the moment.</p>
+      
+      <button id="get-started-btn" class="intro-button">GET STARTED</button>
+    </div>
+    
+    <div id="canvas-container" class="hidden"></div>
+    <div id="joystick-container" class="hidden">
+      <div id="joystick-base"><div id="joystick-handle"></div></div>
+    </div>
+    <div id="look-area" class="hidden"></div>
+    <button id="addContentBtn" class="hidden">+</button>
+    
+    <!-- Fine Adjustment Panel for Stage 2 -->
+    <div id="fineAdjustmentPanel" class="collapsible-panel">
+      <div id="panelHandle" class="panel-handle">
+        <span class="handle-indicator"></span>
+      </div>
+      <div id="panelContent" class="panel-content">
+        <div class="tab-buttons">
+          <button class="tab-button active-tab" data-tab="rotation">Rotation</button>
+          <button class="tab-button" data-tab="size">Size</button>
+          <button class="tab-button" data-tab="presets">Presets</button>
+        </div>
+        <div id="tabRotation" class="tab-content active-tab-content">
+          <div class="control-group">
+            <span>Pitch:</span>
+            <div>
+              <button id="adjustNegPitchBtn" class="control-btn-small">-</button>
+              <button id="adjustPosPitchBtn" class="control-btn-small">+</button>
+            </div>
+          </div>
+          <div class="control-group">
+            <span>Yaw:</span>
+            <div>
+              <button id="adjustNegYawBtn" class="control-btn-small">-</button>
+              <button id="adjustPosYawBtn" class="control-btn-small">+</button>
+            </div>
+          </div>
+          <div class="control-group">
+            <span>Roll:</span>
+            <div>
+              <button id="adjustNegRollBtn" class="control-btn-small">-</button>
+              <button id="adjustPosRollBtn" class="control-btn-small">+</button>
+            </div>
+          </div>
+        </div>
+        <div id="tabSize" class="tab-content">
+          <div class="control-group">
+            <span>Scale:</span>
+            <div class="scale-control-container">
+              <input type="range" id="adjustScaleSlider" min="0.2" max="3.0" value="1.0" step="0.1">
+              <span id="adjustScaleValue">1.0x</span>
+            </div>
+          </div>
+        </div>
+        <div id="tabPresets" class="tab-content">
+          <button id="alignToWallBtn" class="preset-btn">Align to Wall</button>
+          <button id="placeHorizontallyBtn" class="preset-btn">Place Horizontally</button>
+        </div>
+      </div>
+      <button id="goToSetViewpointBtn" class="action-button-green">Set Creator Viewpoint</button>
+    </div>
+    
+    <!-- Old Fine Adjustment Controls (to be removed) -->
+    <div id="fineAdjustmentControlsContainer" style="display: none;">
+      <div class="adjustment-controls-group">
+        <h3>Position</h3>
+        <div class="adjustment-row">
+          <label>X:</label>
+          <button id="adjustNegXBtn" class="adjust-btn">-</button>
+          <button id="adjustPosXBtn" class="adjust-btn">+</button>
+        </div>
+        <div class="adjustment-row">
+          <label>Y:</label>
+          <button id="adjustNegYBtn" class="adjust-btn">-</button>
+          <button id="adjustPosYBtn" class="adjust-btn">+</button>
+        </div>
+        <div class="adjustment-row">
+          <label>Z (Depth):</label>
+          <button id="adjustNegZBtn" class="adjust-btn">-</button>
+          <button id="adjustPosZBtn" class="adjust-btn">+</button>
+        </div>
+      </div>
+      
+      <div class="adjustment-controls-group">
+        <h3>Rotation</h3>
+        <div class="adjustment-row">
+          <label>Pitch:</label>
+          <button id="adjustNegPitchBtn" class="adjust-btn">-</button>
+          <button id="adjustPosPitchBtn" class="adjust-btn">+</button>
+        </div>
+        <div class="adjustment-row">
+          <label>Yaw:</label>
+          <button id="adjustNegYawBtn" class="adjust-btn">-</button>
+          <button id="adjustPosYawBtn" class="adjust-btn">+</button>
+        </div>
+        <div class="adjustment-row">
+          <label>Roll:</label>
+          <button id="adjustNegRollBtn" class="adjust-btn">-</button>
+          <button id="adjustPosRollBtn" class="adjust-btn">+</button>
+        </div>
+      </div>
+      
+      <div class="adjustment-controls-group">
+        <h3>Scale</h3>
+        <div class="scale-control-container">
+          <input type="range" id="adjustScaleSlider" min="0.2" max="3.0" value="1.0" step="0.1">
+          <span id="adjustScaleValue">1.0x</span>
+        </div>
+      </div>
+      
+      <div class="adjustment-controls-group">
+        <h3>Presets</h3>
+        <button id="alignToWallBtn" class="preset-btn">贴墙 (Align to Wall)</button>
+        <button id="placeHorizontallyBtn" class="preset-btn">水平放置 (Place Horizontally)</button>
+      </div>
+      
+      <button id="goToSetViewpointBtn" class="stage-transition-btn">设置创作者视角 (Set Creator Viewpoint)</button>
+    </div>
+    
+    <div id="contentPanel" class="hidden">
+      <div id="contentTypeSelectView" class="view active">
+        <button id="selectPhotoTypeBtn">Photo</button>
+        <button id="selectTextTypeBtn">Text</button>
+        <button id="reviewCreatorViewpointsBtn">Explore</button>
+      </div>
+      <div id="cameraModeView" class="view">
+        <video id="cameraPreview" autoplay playsinline style="width: 320px; height: 240px; border:1px solid #555; background:#111;"></video>
+        <input type="file" id="galleryInput" accept="image/*" style="display: none;">
+        <div class="camera-control-row">
+          <button id="galleryFromCamBtn" class="camera-control-icon-btn">🖼️</button>
+          <button id="captureFromCamBtn">○</button>
+          <button id="flipCameraBtn" class="camera-control-icon-btn">⇄</button>
+        </div>
+        <button id="backToTypesBtn">Back</button>
+      </div>
+      <div id="imagePreviewView" class="view">
+        <div class="scale-control-container" style="padding: 10px; text-align: center; display: block;">
+          <label for="photoScaleSlider" style="margin-right: 8px; color: #333;">Photo Size:</label>
+          <input type="range" id="photoScaleSlider" min="0.2" max="3.0" value="1.0" step="0.1" style="vertical-align: middle; width: 150px;">
+          <span id="photoScaleValue" style="margin-left: 8px; color: #333;">1.0x</span>
+        </div>
+        <img id="imagePreview" style="max-width: 320px; max-height: 240px; border:1px solid #555; background:#111;">
+        <button id="pinPhotoBtn" disabled>Pin Photo</button>
+        <button id="chooseDifferentBtn">Choose Different</button>
+      </div>
+    </div>
+  </body>
+</html>
