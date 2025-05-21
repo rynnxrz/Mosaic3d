@@ -184,11 +184,24 @@ window.addEventListener('DOMContentLoaded', () => {
             console.log('Wall2 UUID:', child.uuid);
             console.log('Wall2 Bounding Box:', new THREE.Box3().setFromObject(child));
             
-            // Option A: Make it bright red
-            child.material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            // Apply glass-like material
+            child.visible = true; // Ensure it's visible
             
-            // Option B: Make it invisible (uncomment to see if you can pass through its space)
-            // child.visible = false;
+            // Create and apply the new glass material
+            const glassMaterial = new THREE.MeshPhysicalMaterial({
+                color: 0xcccccc,          // A light grey/white base color for glass
+                transmission: 1.0,        // Full light transmission for glass effect
+                opacity: 0.2,             // Adjust opacity for subtle glass
+                transparent: true,
+                roughness: 0.05,          // Smooth surface
+                metalness: 0.1,           // Low metalness
+                thickness: 0.1,           // Affects transmission
+                side: THREE.DoubleSide,   // Render both sides, important for thin planes
+                clearcoat: 0.5,           // Extra glossy layer
+                clearcoatRoughness: 0.03,
+                ior: 1.5                  // Index of Refraction (glass is around 1.45-1.55)
+            });
+            child.material = glassMaterial;
           }
         }
       });
@@ -301,6 +314,10 @@ window.addEventListener('DOMContentLoaded', () => {
   camera.position.y = CAMERA_HEIGHT;
 
   function tryMoveCamera(newPos) {
+    console.log('tryMoveCamera: Collisions temporarily disabled. Allowing all movement.');
+    return true; // <-- This makes all objects passable
+
+    /* --- Original collision logic commented out ---
     // Simple collision: check against collidables
     const isJoystickActiveAndMoving = joystickActive && (joystickDelta.x !== 0 || joystickDelta.y !== 0);
     
@@ -330,6 +347,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     // No collision
     return true;
+    */
   }
 
   function updateCamera() {
@@ -2152,7 +2170,7 @@ window.addEventListener('DOMContentLoaded', () => {
     keyboardHint.id = 'keyboardHint';
     keyboardHint.textContent = 'Keyboard: ← → arrows or ESC to exit';
     keyboardHint.style.position = 'fixed';
-    keyboardHint.style.bottom = '80px';
+    keyboardHint.style.bottom = '120px';
     keyboardHint.style.left = '50%';
     keyboardHint.style.transform = 'translateX(-50%)';
     keyboardHint.style.fontSize = '14px';
