@@ -28,7 +28,10 @@
       <div id="joystick-base"><div id="joystick-handle"></div></div>
     </div>
     <div id="look-area"></div>
-    <button id="addContentBtn">+</button>
+    <button id="addContentBtn">
+      <span class="material-symbols-outlined icon-plus">add</span>
+      <span class="material-symbols-outlined icon-close">close</span>
+    </button>
     
     <!-- Fine Adjustment Panel for Stage 2 -->
     <div id="fineAdjustmentPanel" class="collapsible-panel">
@@ -156,9 +159,9 @@
       </div>
       <div id="imagePreviewView" class="view">
         <div class="scale-control-container" style="padding: 10px; text-align: center; display: block;">
-          <label for="photoScaleSlider" style="margin-right: 8px; color: #333;">Photo Size:</label>
+          <label for="photoScaleSlider" style="margin-right: 8px; color: white;">Photo Size:</label>
           <input type="range" id="photoScaleSlider" min="0.2" max="3.0" value="1.0" step="0.1" style="vertical-align: middle; width: 150px;">
-          <span id="photoScaleValue" style="margin-left: 8px; color: #333;">1.0x</span>
+          <span id="photoScaleValue" style="margin-left: 8px; color: white;">1.0x</span>
         </div>
         <img id="imagePreview" style="max-width: 320px; max-height: 240px; border:1px solid #555; background:#111;">
         <button id="pinPhotoBtn" disabled>Pin Photo</button>

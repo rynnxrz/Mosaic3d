@@ -13,6 +13,27 @@ window.addEventListener('DOMContentLoaded', () => {
     console.log('Body touchstart detected');
   }, { passive: true });
   
+  // ---- Prevent Double-Tap Zoom on iOS Safari ----
+  // If two touchend events occur within 300ms, block the second's default zoom.
+  let _lastTouchEnd = 0;
+  document.addEventListener('touchend', function(e) {
+    const now = Date.now();
+    if (now - _lastTouchEnd <= 300) {
+      // Only prevent default on double-tap for joystick elements
+      const joystickBase = document.getElementById('joystick-base');
+      const joystickHandle = document.getElementById('joystick-handle');
+      
+      if (e.target === joystickBase || 
+          (joystickBase && joystickBase.contains(e.target)) || 
+          e.target === joystickHandle || 
+          (joystickHandle && joystickHandle.contains(e.target))) {
+        e.preventDefault();
+        console.log('Double-tap prevented on joystick element');
+      }
+    }
+    _lastTouchEnd = now;
+  }, false);
+  
   // --- State Variables for UI and 3D Scene ---
   // Photo pinning variables
   let processedImageBlob = null;
@@ -516,15 +537,56 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Helper: show only one view in the panel
   function showPanelView(viewId) {
-    [contentTypeSelectView, cameraModeView, imagePreviewView].forEach(v => v && v.classList.remove('active'));
-    const view = getEl(viewId);
-    if (view) view.classList.add('active');
-    // Fullscreen for camera or preview
-    if (contentPanel) {
-      if (viewId === 'cameraModeView' || viewId === 'imagePreviewView') {
-        contentPanel.classList.add('fullscreen-panel');
-      } else {
-        contentPanel.classList.remove('fullscreen-panel');
+    // Get the current state
+    const isCurrentlyFullscreen = contentPanel && contentPanel.classList.contains('fullscreen-panel');
+    const willBeFullscreen = viewId === 'cameraModeView' || viewId === 'imagePreviewView';
+    
+    // If we're transitioning between fullscreen and bubble or vice versa,
+    // we need to handle the timing differently
+    if (isCurrentlyFullscreen !== willBeFullscreen) {
+      // First, hide all views during the transition
+      [contentTypeSelectView, cameraModeView, imagePreviewView].forEach(v => {
+        if (v) v.classList.remove('active');
+      });
+      
+      if (contentPanel) {
+        if (willBeFullscreen) {
+          // Going from bubble to fullscreen
+          contentPanel.classList.add('fullscreen-panel');
+          // Delay showing the new view slightly to allow transition to start
+          setTimeout(() => {
+            const view = getEl(viewId);
+            if (view) view.classList.add('active');
+          }, 50);
+        } else {
+          // Going from fullscreen to bubble
+          // Wait for transition to complete before removing fullscreen
+          setTimeout(() => {
+            contentPanel.classList.remove('fullscreen-panel');
+            // Delay showing the new view slightly
+            setTimeout(() => {
+              const view = getEl(viewId);
+              if (view) view.classList.add('active');
+            }, 50);
+          }, 50);
+        }
+      }
+    } else {
+      // Normal view switch within the same panel type (fullscreen or bubble)
+      [contentTypeSelectView, cameraModeView, imagePreviewView].forEach(v => {
+        if (v) v.classList.remove('active');
+      });
+      
+      const view = getEl(viewId);
+      if (view) view.classList.add('active');
+      
+      // Update fullscreen state
+      if (contentPanel) {
+        if (willBeFullscreen) {
+          contentPanel.classList.add('fullscreen-panel');
+        } else {
+          contentPanel.classList.remove('fullscreen-panel');
+        }
       }
     }
     
@@ -534,14 +596,18 @@ window.addEventListener('DOMContentLoaded', () => {
       photoScaleValue.textContent = currentPhotoScale.toFixed(1) + 'x';
     }
   }
+  
   function openPanel() {
     if (contentPanel) contentPanel.classList.add('panel-active');
     if (addContentBtn) {
       addContentBtn.classList.add('is-close-icon');
-      addContentBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
     }
+    
+    // Hide joystick when panel is open (handled by CSS now)
+    
     showPanelView('contentTypeSelectView');
   }
+  
   function closePanel() {
     if (contentPanel) {
       contentPanel.classList.remove('panel-active');
@@ -549,13 +615,16 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     if (addContentBtn) {
       addContentBtn.classList.remove('is-close-icon');
-      addContentBtn.innerHTML = '<span class="material-symbols-outlined">add</span>';
     }
+    
+    // Show joystick when panel is closed (handled by CSS now)
+    
     showPanelView('contentTypeSelectView');
     stopCamera();
     processedImageBlob = null;
     imagePreview.src = '';
   }
+  
   function stopCamera() {
     if (cameraStream) {
       cameraStream.getTracks().forEach(track => track.stop());
@@ -1221,7 +1290,6 @@ window.addEventListener('DOMContentLoaded', () => {
     pinningMode = enter;
     
     if (enter) {
-      addContentBtn.innerHTML = '<span class="material-symbols-outlined">cancel</span>';
       addContentBtn.setAttribute('data-mode', 'pinning');
       
       // Remove old helper message if it exists
@@ -1229,8 +1297,10 @@ window.addEventListener('DOMContentLoaded', () => {
       if (oldHelpMsg) {
         document.body.removeChild(oldHelpMsg);
       }
+      
+      // Create a cancel pinning mode button
+      createCancelPinningButton();
     } else {
-      addContentBtn.innerHTML = '<span class="material-symbols-outlined">add</span>';
       addContentBtn.removeAttribute('data-mode');
       
       // Reset placement stage
@@ -1268,7 +1338,52 @@ window.addEventListener('DOMContentLoaded', () => {
       // Clear Stage 3 variables
       recordedCreatorPosition = null;
       recordedCreatorQuaternion = null;
+      
+      // Remove the cancel pinning button if it exists
+      const cancelPinBtn = document.getElementById('cancelPinningBtn');
+      if (cancelPinBtn) {
+        document.body.removeChild(cancelPinBtn);
+      }
     }
+  }
+
+  // Create a cancel button for pinning mode
+  function createCancelPinningButton() {
+    // Check if button already exists
+    let cancelBtn = document.getElementById('cancelPinningBtn');
+    if (cancelBtn) {
+      return cancelBtn;
+    }
+    
+    // Create new button
+    cancelBtn = document.createElement('button');
+    cancelBtn.id = 'cancelPinningBtn';
+    cancelBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
+    cancelBtn.style.position = 'fixed';
+    cancelBtn.style.top = '20px';
+    cancelBtn.style.right = '20px';
+    cancelBtn.style.width = '48px';
+    cancelBtn.style.height = '48px';
+    cancelBtn.style.borderRadius = '50%';
+    cancelBtn.style.background = 'rgba(220, 53, 69, 0.85)';
+    cancelBtn.style.color = 'white';
+    cancelBtn.style.border = 'none';
+    cancelBtn.style.display = 'flex';
+    cancelBtn.style.alignItems = 'center';
+    cancelBtn.style.justifyContent = 'center';
+    cancelBtn.style.zIndex = '200';
+    cancelBtn.style.cursor = 'pointer';
+    cancelBtn.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+    
+    // Add click event
+    cancelBtn.addEventListener('click', () => {
+      togglePinningMode(false);
+    });
+    
+    // Add to document
+    document.body.appendChild(cancelBtn);
+    
+    return cancelBtn;
   }
 
   // Pin photo implementation
@@ -1454,13 +1569,8 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Add content button can cancel pinning mode
   if (addContentBtn) {
-    const originalClickHandler = addContentBtn.onclick;
     addContentBtn.addEventListener('click', () => {
-      if (pinningMode) {
-        togglePinningMode(false);
-        return;
-      }
-      
+      // Decoupled from pinning mode - button now only controls panel
       if (contentPanel && contentPanel.classList.contains('panel-active')) {
         closePanel();
       } else {
@@ -1736,7 +1846,6 @@ window.addEventListener('DOMContentLoaded', () => {
     
     // Reset addContentBtn
     if (addContentBtn) {
-      addContentBtn.innerHTML = '<span class="material-symbols-outlined">add</span>';
       addContentBtn.removeAttribute('data-mode');
     }
     
@@ -1746,6 +1855,12 @@ window.addEventListener('DOMContentLoaded', () => {
     if (skipViewpointBtn) skipViewpointBtn.style.display = 'none';
     if (completePlacementBtn) completePlacementBtn.style.display = 'none';
     if (stageIndicator) stageIndicator.style.display = 'none';
+    
+    // Remove the cancel pinning button if it exists
+    const cancelPinBtn = document.getElementById('cancelPinningBtn');
+    if (cancelPinBtn) {
+      document.body.removeChild(cancelPinBtn);
+    }
     
     console.log('Photo placement completed and all state reset');
   }
@@ -2080,9 +2195,10 @@ window.addEventListener('DOMContentLoaded', () => {
     // Remove navigation controls
     removeViewModeControls();
     
-    // Show the add content button again
+    // Show the add content button again and reset its state
     if (addContentBtn) {
       addContentBtn.style.display = 'block';
+      addContentBtn.classList.remove('is-close-icon'); // Ensure it's in the default "+" state
     }
     
     // Clear viewpoint data

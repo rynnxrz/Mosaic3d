@@ -233,22 +233,24 @@ button:focus-visible {
   left: 50%;
   bottom: 32px;
   transform: translateX(-50%);
-  background: transparent;
+  background: rgba(40, 40, 45, 0.85);
   border: none;
-  box-shadow: none;
-  width: auto;
-  height: auto;
-  border-radius: 0;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 12px;
+  padding: 0;
   z-index: 100;
   cursor: pointer;
   outline: none;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  transition: background-color 0.3s ease;
 }
+
 #addContentBtn .material-symbols-outlined {
-  font-size: 68px;
+  font-size: 42px;
   font-variation-settings:
     'FILL' 0,
     'wght' 300,
@@ -256,46 +258,91 @@ button:focus-visible {
     'opsz' 48;
   color: rgba(255,255,255,0.9);
   text-shadow: 0 2px 6px rgba(0,0,0,0.2);
-  transition: color 0.18s, transform 0.15s;
+  transition: color 0.18s, transform 0.3s ease-in-out;
+  position: absolute;
 }
+
 #addContentBtn:active .material-symbols-outlined {
   color: #fff;
   transform: scale(0.92);
 }
+
 #addContentBtn:hover .material-symbols-outlined,
 #addContentBtn:focus-visible .material-symbols-outlined {
   color: #fff;
 }
-#addContentBtn .icon-close { display: none; }
-#addContentBtn .icon-plus { display: inline-block; }
-#addContentBtn.is-close-icon .icon-plus { display: none; }
-#addContentBtn.is-close-icon .icon-close { display: inline-block; }
+
+#addContentBtn .icon-close { 
+  transform: rotate(45deg) scale(0);
+  transition: transform 0.3s ease-in-out, opacity 0.2s ease-in-out;
+  opacity: 0;
+}
+
+#addContentBtn .icon-plus { 
+  transform: rotate(0) scale(1);
+  transition: transform 0.3s ease-in-out, opacity 0.2s ease-in-out;
+  opacity: 1;
+}
+
+#addContentBtn.is-close-icon .icon-plus { 
+  transform: rotate(-45deg) scale(0);
+  opacity: 0;
+}
+
+#addContentBtn.is-close-icon .icon-close { 
+  transform: rotate(0) scale(1);
+  opacity: 1;
+}
 
 #contentPanel {
   position: fixed;
   width: 95vw;
   max-width: 400px;
-  max-height: 0;
-  overflow: hidden;
-  background-color: #f9f9f9;
-  color: #333;
+  background-color: rgba(40, 40, 45, 0.85);
+  color: white;
   border-radius: 20px;
-  bottom: -30px;
   left: 50%;
-  transform: translateX(-50%);
+  bottom: 32px;
+  transform: translate(-50%, 0) scale(0);
+  transform-origin: bottom center;
   z-index: 90;
-  transition: max-height 0.4s ease-in-out, bottom 0.4s ease-in-out;
   display: flex;
   flex-direction: column;
   box-shadow: 0 0 15px rgba(0, 0, 0, 0.15);
+  opacity: 0;
+  visibility: hidden;
+  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), 
+              opacity 0.3s ease,
+              visibility 0s linear 0.3s,
+              border-radius 0.4s ease,
+              padding 0.4s ease,
+              width 0.4s ease,
+              max-width 0.4s ease,
+              height 0.4s ease,
+              max-height 0.4s ease,
+              bottom 0.4s ease;
+  max-height: min(60vh, calc(100vh - 110px));
+  min-height: 200px;
+  overflow: hidden; /* Always hidden in bubble state */
+  padding: 20px 20px 88px 20px; /* Extra padding at bottom to accommodate the button */
 }
 
 #contentPanel.panel-active {
-  bottom: 110px;
-  max-height: min(60vh, calc(100vh - 110px));
-  min-height: 250px;
-  overflow: auto;
-  padding: 20px;
+  transform: translate(-50%, 0) scale(1);
+  opacity: 1;
+  visibility: visible;
+  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), 
+              opacity 0.3s ease,
+              visibility 0s linear 0s,
+              border-radius 0.4s ease,
+              padding 0.4s ease,
+              width 0.4s ease,
+              max-width 0.4s ease,
+              height 0.4s ease,
+              max-height 0.4s ease,
+              bottom 0.4s ease;
+  height: auto; /* Let it size naturally based on content */
+  overflow: hidden; /* No scrolling in bubble mode */
 }
 
 #contentPanel.fullscreen-panel {
@@ -310,6 +357,15 @@ button:focus-visible {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  transform: translate(-50%, 0) scale(1);
+  transform-origin: bottom center;
+  overflow: auto; /* Allow scrolling in fullscreen mode */
+}
+
+/* Ensure text in image preview view is always visible */
+#imagePreviewView label, 
+#imagePreviewView span {
+  color: white !important;
 }
 
 .view {
@@ -319,16 +375,16 @@ button:focus-visible {
   gap: 20px;
   width: 100%;
 }
+
 .view.active {
   display: flex;
 }
+
 #contentPanel button {
   padding: 12px 20px;
   border-radius: 10px;
   border: none;
-  background: rgba(70, 70, 70, 0.7);
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
+  background: transparent;
   color: white;
   font-size: 16px;
   cursor: pointer;
@@ -336,32 +392,76 @@ button:focus-visible {
   box-sizing: border-box;
   margin: 0.2em 0;
   transition: background 0.2s;
+  text-align: center;
 }
+
+#contentPanel button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
 #contentPanel button:disabled {
-  background: rgba(100,100,100,0.5);
-  color: #888;
+  color: rgba(255, 255, 255, 0.4);
   cursor: not-allowed;
 }
 
 /* Style for the Review Creator Viewpoints button */
 #reviewCreatorViewpointsBtn {
-  background: rgba(70, 70, 70, 0.7);
   color: white;
   border: none;
   transition: background 0.2s;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
 }
+
 #reviewCreatorViewpointsBtn:hover {
-  background: rgba(80, 80, 80, 0.9);
+  background: rgba(255, 255, 255, 0.1);
 }
+
 #reviewCreatorViewpointsBtn:active {
-  background: rgba(45, 107, 255, 0.5);
+  background: rgba(255, 255, 255, 0.2);
 }
 
 #closePanelBtn, #backToTypesBtn {
-  /* #closePanelBtn, #backToTypesBtn {
-    background: rgba(90, 90, 90, 0.7);
-  } */
+  background: transparent;
+}
+
+/* Add a pseudo-element to create the visual connection to the addContentBtn */
+#contentPanel.panel-active::after {
+  content: '';
+  position: absolute;
+  display: none;
+  bottom: -34px; /* Position it to connect with the button */
+  left: 50%;
+  transform: translateX(-50%);
+  width: 68px;
+  height: 68px;
+  background: rgba(40, 40, 45, 0.85); /* Match the panel background */
+  border-radius: 50%;
+  z-index: -1; /* Place it behind the actual button */
+}
+
+/* Make the addContentBtn visually integrated with the panel when active */
+#addContentBtn {
+  z-index: 100;
+  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+#contentPanel.panel-active ~ #addContentBtn {
+  background-color: rgba(40, 40, 45, 0.85); /* Match panel background */
+  box-shadow: none; /* Remove shadow when integrated with panel */
+}
+
+/* Hide joystick when panel is active with smooth transition */
+#joystick-container {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.3s ease, visibility 0s linear 0s;
+  pointer-events: auto;
+}
+
+#contentPanel.panel-active ~ #joystick-container {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0s linear 0.3s;
+  pointer-events: none;
 }
 
 .camera-control-row {
@@ -683,6 +783,24 @@ button:focus-visible {
 /* Ensure the addContentBtn when acting as cancel button has proper visibility */
 #addContentBtn[data-mode="pinning"] .material-symbols-outlined {
   color: rgba(255, 80, 80, 0.9);
+}
+
+/* Cancel pinning button styles */
+#cancelPinningBtn {
+  transition: transform 0.2s, background-color 0.2s;
+}
+
+#cancelPinningBtn:hover {
+  background-color: rgba(220, 53, 69, 0.95) !important;
+}
+
+#cancelPinningBtn:active {
+  transform: scale(0.92);
+}
+
+#cancelPinningBtn .material-symbols-outlined {
+  font-size: 28px;
+  color: white;
 }
 
 /* View mode button flash animation */
