@@ -1,0 +1,20 @@
+[
+  {
+    "origin": [
+      "http://localhost:5173",
+      "http://localhost:4173",
+      "https://*.ngrok-free.app",
+      "https://mosaic3d.pages.dev"
+    ],
+    "method": ["GET", "HEAD", "PUT", "POST", "DELETE"],
+    "responseHeader": [
+      "Content-Type",
+      "Access-Control-Allow-Origin",
+      "Authorization",
+      "X-Goog-Resumable",
+      "Content-Length",
+      "Origin"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]

@@ -4,8 +4,12 @@ const DB_VERSION = 2;
 const IMAGES_STORE = 'images';
 const METADATA_STORE = 'pinnedPhotoMetadata';
 
+// Import Firebase functions
+import { initFirebase, getCurrentFirebaseUserId, savePinnedItemToFirestore, loadPinnedItemsFromFirestore, deletePinnedItemFromFirestore } from './firebase.js';
+
 // Database instance
 let db = null;
+let useFirebase = true; // Set to true to use Firebase, false to use only IndexedDB
 
 /**
  * Get the database instance, opening it if necessary
@@ -41,70 +45,105 @@ async function getDB() {
 }
 
 /**
- * Initialize the IndexedDB database
+ * Initialize the database (both IndexedDB and Firebase if enabled)
  * @returns {Promise} A promise that resolves when the database is ready
  */
-export function initDB() {
-  return new Promise((resolve, reject) => {
-    if (db) {
-      resolve(db);
-      return;
+export async function initDB() {
+  try {
+    // Initialize Firebase if enabled
+    if (useFirebase) {
+      await initFirebase();
+      console.log('Firebase initialized with user ID:', getCurrentFirebaseUserId());
     }
-
-    console.log(`Opening IndexedDB database: ${DB_NAME}, version: ${DB_VERSION}`);
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onerror = (event) => {
-      console.error('IndexedDB error:', event.target.error);
-      reject(event.target.error);
-    };
-
-    request.onsuccess = (event) => {
-      db = event.target.result;
-      console.log('Database initialized successfully');
-      
-      // Log the object store names for debugging
-      console.log('Object stores in the database:', Array.from(db.objectStoreNames));
-      
-      resolve(db);
-    };
-
-    request.onupgradeneeded = (event) => {
-      db = event.target.result;
-      console.log('Database upgrade needed, creating object stores');
-      const oldVersion = event.oldVersion;
-      console.log(`Upgrading from version ${oldVersion} to ${DB_VERSION}`);
-      
-      // Create object store for images with imageId as key
-      if (!db.objectStoreNames.contains(IMAGES_STORE)) {
-        const imageStore = db.createObjectStore(IMAGES_STORE, { keyPath: 'id' });
-        console.log(`Created '${IMAGES_STORE}' object store with keyPath 'id'`);
-      } else {
-        console.log(`Object store '${IMAGES_STORE}' already exists`);
+    
+    // Initialize IndexedDB
+    return new Promise((resolve, reject) => {
+      if (db) {
+        resolve(db);
+        return;
       }
-      
-      // Create object store for metadata with auto-incrementing ID
-      if (!db.objectStoreNames.contains(METADATA_STORE)) {
-        const metadataStore = db.createObjectStore(METADATA_STORE, { 
-          keyPath: 'id', 
-          autoIncrement: true 
-        });
+
+      console.log(`Opening IndexedDB database: ${DB_NAME}, version: ${DB_VERSION}`);
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+      request.onerror = (event) => {
+        console.error('IndexedDB error:', event.target.error);
+        reject(event.target.error);
+      };
+
+      request.onsuccess = (event) => {
+        db = event.target.result;
+        console.log('Database initialized successfully');
         
-        // Create index on imageId for quick lookups
-        metadataStore.createIndex('imageId', 'imageId', { unique: false });
-        console.log(`Created '${METADATA_STORE}' object store with keyPath 'id' and index on 'imageId'`);
-      } else {
-        console.log(`Object store '${METADATA_STORE}' already exists`);
+        // Log the object store names for debugging
+        console.log('Object stores in the database:', Array.from(db.objectStoreNames));
         
-        // We don't need to modify existing store structure for version upgrade
-        // IndexedDB automatically preserves existing data and structure
-      }
-    };
-  });
+        resolve(db);
+      };
+
+      request.onupgradeneeded = (event) => {
+        db = event.target.result;
+        console.log('Database upgrade needed, creating object stores');
+        const oldVersion = event.oldVersion;
+        console.log(`Upgrading from version ${oldVersion} to ${DB_VERSION}`);
+        
+        // Create object store for images with imageId as key
+        if (!db.objectStoreNames.contains(IMAGES_STORE)) {
+          const imageStore = db.createObjectStore(IMAGES_STORE, { keyPath: 'id' });
+          console.log(`Created '${IMAGES_STORE}' object store with keyPath 'id'`);
+        } else {
+          console.log(`Object store '${IMAGES_STORE}' already exists`);
+        }
+        
+        // Create object store for metadata with auto-incrementing ID
+        if (!db.objectStoreNames.contains(METADATA_STORE)) {
+          const metadataStore = db.createObjectStore(METADATA_STORE, { 
+            keyPath: 'id', 
+            autoIncrement: true 
+          });
+          
+          // Create index on imageId for quick lookups
+          metadataStore.createIndex('imageId', 'imageId', { unique: false });
+          console.log(`Created '${METADATA_STORE}' object store with keyPath 'id' and index on 'imageId'`);
+        } else {
+          console.log(`Object store '${METADATA_STORE}' already exists`);
+          
+          // We don't need to modify existing store structure for version upgrade
+          // IndexedDB automatically preserves existing data and structure
+        }
+      };
+    });
+  } catch (error) {
+    console.error('Error initializing databases:', error);
+    throw error;
+  }
 }
 
 /**
- * Persist a pinned photo (metadata + transform) to IndexedDB.
+ * Get the current user ID (from Firebase if enabled, or generate a local one)
+ * @returns {string} The user ID
+ */
+export function getUserId() {
+  if (useFirebase) {
+    const firebaseUserId = getCurrentFirebaseUserId();
+    if (firebaseUserId) {
+      return firebaseUserId;
+    }
+  }
+  
+  // Fallback to local storage for user ID if Firebase is not available
+  let userId = localStorage.getItem('mosaic3d_user_id');
+  if (!userId) {
+    // Generate a simple UUID
+    userId = 'local_' + Math.random().toString(36).substring(2, 15) + 
+             Math.random().toString(36).substring(2, 15);
+    localStorage.setItem('mosaic3d_user_id', userId);
+  }
+  return userId;
+}
+
+/**
+ * Persist a pinned photo (metadata + transform) to storage (IndexedDB and/or Firebase).
  * All numeric fields are stored as numbers so typeof === 'number' on retrieval.
  * @param {Blob} imageBlob - The image blob to save
  * @param {string} imageId - The unique ID for the image
@@ -113,38 +152,52 @@ export function initDB() {
  */
 export function savePinnedItem(imageBlob, imageId, transformData) {
   return new Promise(async (resolve, reject) => {
-    if (!db) {
-      try {
-        // Attempt to initialize db if it's null, useful if called before main initDB completes
+    try {
+      if (!db) {
         await initDB();
         if (!db) {
           reject(new Error('Database not initialized after attempted init.'));
           return;
         }
-      } catch (initError) {
-        reject(new Error('Database initialization failed in savePinnedItem: ' + initError));
+      }
+
+      // Validate the input Blob
+      console.log('savePinnedItem called with:', {
+        imageId,
+        'imageBlob instanceof Blob': imageBlob instanceof Blob,
+        'imageBlob size': imageBlob ? imageBlob.size : 'N/A',
+        'imageBlob type': imageBlob ? imageBlob.type : 'N/A'
+      });
+
+      if (!imageBlob || !(imageBlob instanceof Blob) || imageBlob.size === 0) {
+        reject(new Error('Invalid Blob: ' + (imageBlob ? `size: ${imageBlob.size}` : 'null or undefined')));
         return;
       }
-    }
 
-    // Validate the input Blob
-    console.log('savePinnedItem called with:', {
-      imageId,
-      'imageBlob instanceof Blob': imageBlob instanceof Blob,
-      'imageBlob size': imageBlob ? imageBlob.size : 'N/A',
-      'imageBlob type': imageBlob ? imageBlob.type : 'N/A'
-    });
+      // Read the blob as base64
+      const base64ImageData = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(imageBlob);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = error => reject(error);
+      });
 
-    if (!imageBlob || !(imageBlob instanceof Blob) || imageBlob.size === 0) {
-      reject(new Error('Invalid Blob: ' + (imageBlob ? `size: ${imageBlob.size}` : 'null or undefined')));
-      return;
-    }
+      // Save to Firebase if enabled
+      if (useFirebase) {
+        try {
+          // Add the user ID to transform data
+          transformData.userId = getUserId();
+          transformData.type = imageBlob.type || 'image/jpeg';
+          
+          await savePinnedItemToFirestore(imageId, base64ImageData, transformData);
+          console.log(`[Firebase] Pin saved with ID: ${imageId}`);
+        } catch (firebaseError) {
+          console.error('[Firebase] Error saving pin:', firebaseError);
+          // Continue with IndexedDB save even if Firebase fails
+        }
+      }
 
-    const reader = new FileReader();
-    reader.readAsDataURL(imageBlob); // Start reading the blob
-
-    reader.onload = () => { // This is an async callback
-      const base64ImageData = reader.result;
+      // Always save to IndexedDB as a backup
       let transaction;
       try {
         transaction = db.transaction([IMAGES_STORE, METADATA_STORE], 'readwrite');
@@ -192,6 +245,7 @@ export function savePinnedItem(imageBlob, imageId, transformData) {
           // id: auto-incrementing, so don't set it if your keyPath is 'id' and autoIncrement is true
           imageId: imageId,
           timestamp: Date.now(),
+          userId: getUserId(), // Add user ID to metadata
           position: transformData.position,
           orientation: transformData.orientation,
           scale: transformData.scale,
@@ -243,236 +297,234 @@ export function savePinnedItem(imageBlob, imageId, transformData) {
         reject(e);
         return;
       }
-    }; // End of reader.onload
-
-    reader.onerror = (event) => {
-      console.error('[DB] FileReader error in savePinnedItem:', event.target.error);
-      reject(event.target.error);
-    };
+    } catch (error) {
+      console.error('Error in savePinnedItem:', error);
+      reject(error);
+    }
   });
 }
 
 /**
- * Load all pinned photos from IndexedDB and recreate them in the scene
- * @param {THREE.Scene} scene - The Three.js scene to add meshes to
- * @param {Function} callbackToRecreateMesh - Function to recreate the mesh from blob and metadata
- * @returns {Promise} A promise that resolves when all items are loaded
+ * Load pinned items from storage (Firebase and/or IndexedDB)
+ * @param {Object} scene - The THREE.js scene to add items to
+ * @param {Function} callbackToRecreateMesh - Callback to recreate mesh from data
+ * @returns {Promise} A promise that resolves when loading is complete
  */
-export function loadPinnedItems(scene, callbackToRecreateMesh) {
-  return new Promise((resolve, reject) => {
+export async function loadPinnedItems(scene, callbackToRecreateMesh) {
+  try {
+    // Initialize database if needed
     if (!db) {
-      reject(new Error('Database not initialized. Call initDB() first.'));
-      return;
+      await initDB();
     }
-
-    try {
-      console.log('Starting to load pinned items from IndexedDB');
-      
-      const transaction = db.transaction([IMAGES_STORE, METADATA_STORE], 'readonly');
-      
-      transaction.onerror = (event) => {
-        console.error('Transaction error:', event.target.error);
-        reject(event.target.error);
-      };
-      
-      // Get all metadata records
-      const metadataStore = transaction.objectStore(METADATA_STORE);
-      const imageStore = transaction.objectStore(IMAGES_STORE);
-      
-      const metadataRequest = metadataStore.getAll();
-      
-      metadataRequest.onsuccess = () => {
-        const metadataRecords = metadataRequest.result;
-        console.log(`Found ${metadataRecords.length} pinned photos to load`);
+    
+    // Try to load from Firebase first if enabled
+    if (useFirebase) {
+      try {
+        const firebasePins = await loadPinnedItemsFromFirestore();
+        console.log(`[Firebase] Loaded ${firebasePins.length} pins`);
         
-        // Log all imageIds for debugging
-        console.log('ImageIDs to load:', metadataRecords.map(record => record.imageId));
-        
-        // Use Promise.all to wait for all photos to be processed
-        const loadPromises = metadataRecords.map(metadata => {
-          return new Promise((resolveItem, rejectItem) => {
-            // Get the corresponding image
-            console.log(`Loading image for imageId: ${metadata.imageId}`);
-            const imageRequest = imageStore.get(metadata.imageId);
+        // Process Firebase pins
+        for (const pin of firebasePins) {
+          const imageData = pin.imageData;
+          const metadata = pin.metadata;
+          
+          // Convert base64 to Blob
+          const base64Data = imageData.base64.split(',')[1];
+          const byteCharacters = atob(base64Data);
+          const byteArrays = [];
+          
+          for (let i = 0; i < byteCharacters.length; i += 1024) {
+            const slice = byteCharacters.slice(i, i + 1024);
+            const byteNumbers = new Array(slice.length);
+            for (let j = 0; j < slice.length; j++) {
+              byteNumbers[j] = slice.charCodeAt(j);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            byteArrays.push(byteArray);
+          }
+          
+          const imageBlob = new Blob(byteArrays, { type: imageData.type });
+          
+          // Convert Firebase metadata format to the format expected by callbackToRecreateMesh
+          const transformedMetadata = {
+            imageId: metadata.imageId,
+            position: metadata.position,
+            orientation: metadata.orientation,
+            scale: metadata.scale,
+            userScale: metadata.userScale,
+            aspectRatio: metadata.aspectRatio
+          };
+          
+          // Add creator viewpoint if available
+          if (metadata.creatorViewpoint) {
+            transformedMetadata.creatorViewpointPosition_x = metadata.creatorViewpoint.position.x;
+            transformedMetadata.creatorViewpointPosition_y = metadata.creatorViewpoint.position.y;
+            transformedMetadata.creatorViewpointPosition_z = metadata.creatorViewpoint.position.z;
             
-            imageRequest.onsuccess = () => {
-              const imageRecord = imageRequest.result;
-              console.log(`Image record retrieved for imageId: ${metadata.imageId}`, 
-                imageRecord ? {
-                  'record keys': Object.keys(imageRecord),
-                  'has base64': !!imageRecord.base64,
-                  'has blob': !!imageRecord.blob,
-                  'type': imageRecord.type
-                } : 'No record found');
-              
-              // Try loading with base64 string first (new method)
-              if (imageRecord && imageRecord.base64) {
-                try {
-                  console.log(`Found base64 data for imageId: ${metadata.imageId}, length: ${imageRecord.base64.length}`);
-                  
-                  // Convert base64 to Blob
-                  const base64Data = imageRecord.base64;
-                  
-                  // Check if it's a data URL (starts with data:image/)
-                  const isDataUrl = base64Data.startsWith('data:');
-                  let base64Content;
-                  let contentType;
-                  
-                  if (isDataUrl) {
-                    // Extract content type and base64 part
-                    const matches = base64Data.match(/^data:([^;]+);base64,(.+)$/);
-                    if (!matches || matches.length !== 3) {
-                      throw new Error('Invalid data URL format');
-                    }
-                    contentType = matches[1];
-                    base64Content = matches[2];
-                  } else {
-                    // Assume it's just a base64 string
-                    contentType = imageRecord.type || 'image/jpeg';
-                    base64Content = base64Data;
+            if (metadata.creatorViewpoint.quaternion) {
+              transformedMetadata.creatorViewpointQuaternion_x = metadata.creatorViewpoint.quaternion.x;
+              transformedMetadata.creatorViewpointQuaternion_y = metadata.creatorViewpoint.quaternion.y;
+              transformedMetadata.creatorViewpointQuaternion_z = metadata.creatorViewpoint.quaternion.z;
+              transformedMetadata.creatorViewpointQuaternion_w = metadata.creatorViewpoint.quaternion.w;
+            }
+          }
+          
+          // Recreate mesh
+          callbackToRecreateMesh(imageBlob, transformedMetadata);
+        }
+        
+        // If we successfully loaded from Firebase, we can return early
+        if (firebasePins.length > 0) {
+          return;
+        }
+      } catch (firebaseError) {
+        console.error('[Firebase] Error loading pins:', firebaseError);
+        // Fall back to IndexedDB if Firebase fails
+      }
+    }
+    
+    // Fall back to IndexedDB
+    return new Promise((resolve, reject) => {
+      try {
+        // Get all metadata records
+        const transaction = db.transaction([METADATA_STORE, IMAGES_STORE], 'readonly');
+        const metadataStore = transaction.objectStore(METADATA_STORE);
+        const imageStore = transaction.objectStore(IMAGES_STORE);
+        
+        const metadataRequest = metadataStore.openCursor();
+        
+        metadataRequest.onsuccess = (event) => {
+          const cursor = event.target.result;
+          if (cursor) {
+            const metadata = cursor.value;
+            const imageId = metadata.imageId;
+            
+            // Fetch the corresponding image
+            const imageRequest = imageStore.get(imageId);
+            
+            imageRequest.onsuccess = (event) => {
+              const imageRecord = event.target.result;
+              if (imageRecord) {
+                // Convert base64 to Blob
+                const base64Data = imageRecord.base64.split(',')[1];
+                const byteCharacters = atob(base64Data);
+                const byteArrays = [];
+                
+                for (let i = 0; i < byteCharacters.length; i += 1024) {
+                  const slice = byteCharacters.slice(i, i + 1024);
+                  const byteNumbers = new Array(slice.length);
+                  for (let j = 0; j < slice.length; j++) {
+                    byteNumbers[j] = slice.charCodeAt(j);
                   }
-                  
-                  // Convert base64 to binary
-                  const byteCharacters = atob(base64Content);
-                  const byteArrays = [];
-                  
-                  for (let offset = 0; offset < byteCharacters.length; offset += 512) {
-                    const slice = byteCharacters.slice(offset, offset + 512);
-                    
-                    const byteNumbers = new Array(slice.length);
-                    for (let i = 0; i < slice.length; i++) {
-                      byteNumbers[i] = slice.charCodeAt(i);
-                    }
-                    
-                    const byteArray = new Uint8Array(byteNumbers);
-                    byteArrays.push(byteArray);
-                  }
-                  
-                  const blob = new Blob(byteArrays, { type: contentType });
-                  
-                  console.log(`Blob created successfully from base64 for imageId: ${metadata.imageId}`, {
-                    'blob size': blob.size,
-                    'blob type': blob.type
-                  });
-                  
-                  // Call the provided callback to recreate the mesh
-                  callbackToRecreateMesh(blob, metadata);
-                  resolveItem();
-                } catch (error) {
-                  console.error(`Error converting base64 to Blob for imageId: ${metadata.imageId}`, error);
-                  resolveItem(); // Still resolve to allow other items to load
-                }
-              } 
-              // Fallback to blob property (old method)
-              else if (imageRecord && imageRecord.blob) {
-                try {
-                  console.log(`Using direct blob for imageId: ${metadata.imageId}`, {
-                    'blob type': imageRecord.blob.type,
-                    'blob size': imageRecord.blob.size,
-                    'blob is instanceof Blob': imageRecord.blob instanceof Blob
-                  });
-                  
-                  // Call the provided callback to recreate the mesh
-                  callbackToRecreateMesh(imageRecord.blob, metadata);
-                  resolveItem();
-                } catch (error) {
-                  console.error(`Error using blob for imageId: ${metadata.imageId}`, error);
-                  resolveItem(); // Resolve even if error to continue with others
-                }
-              } else {
-                // Debug the specific issue
-                if (!imageRecord) {
-                  console.warn(`No image record found for imageId: ${metadata.imageId}`);
-                } else {
-                  console.warn(`Image record found for imageId: ${metadata.imageId} but no usable image data`);
-                  console.log('Image record details:', {
-                    id: imageRecord.id,
-                    keys: Object.keys(imageRecord),
-                    'base64 exists': !!imageRecord.base64,
-                    'blob exists': !!imageRecord.blob
-                  });
+                  const byteArray = new Uint8Array(byteNumbers);
+                  byteArrays.push(byteArray);
                 }
                 
-                resolveItem(); // Resolve even if image not found to continue with others
+                const imageBlob = new Blob(byteArrays, { type: imageRecord.type });
+                
+                // Recreate mesh
+                callbackToRecreateMesh(imageBlob, metadata);
               }
             };
             
             imageRequest.onerror = (event) => {
-              console.error(`Error fetching image for imageId: ${metadata.imageId}`, event.target.error);
-              rejectItem(event.target.error);
+              console.error(`Error fetching image with ID ${imageId}:`, event.target.error);
             };
-          });
-        });
-        
-        Promise.all(loadPromises)
-          .then(() => {
-            console.log('All pinned photos loaded successfully');
+            
+            cursor.continue();
+          } else {
+            console.log('No more entries in metadata store');
             resolve();
-          })
-          .catch(error => {
-            console.error('Error loading pinned photos:', error);
-            reject(error);
-          });
-      };
-      
-      metadataRequest.onerror = (event) => {
-        console.error('Error fetching metadata:', event.target.error);
-        reject(event.target.error);
-      };
-      
-    } catch (error) {
-      console.error('Error in loadPinnedItems:', error);
-      reject(error);
-    }
-  });
+          }
+        };
+        
+        metadataRequest.onerror = (event) => {
+          console.error('Error opening metadata cursor:', event.target.error);
+          reject(event.target.error);
+        };
+        
+        transaction.oncomplete = () => {
+          console.log('All pinned items loaded from IndexedDB');
+          resolve();
+        };
+        
+        transaction.onerror = (event) => {
+          console.error('Transaction error in loadPinnedItems:', event.target.error);
+          reject(event.target.error);
+        };
+      } catch (error) {
+        console.error('Error in loadPinnedItems:', error);
+        reject(error);
+      }
+    });
+  } catch (error) {
+    console.error('Error in loadPinnedItems:', error);
+    throw error;
+  }
 }
 
 /**
- * Delete a pinned photo and its metadata from IndexedDB
- * @param {string} imageId - The unique ID for the image to delete
- * @returns {Promise} A promise that resolves when the delete is complete
+ * Delete a pinned item from storage (Firebase and/or IndexedDB)
+ * @param {string} imageId - The ID of the image to delete
+ * @returns {Promise} A promise that resolves when the deletion is complete
  */
-export function deletePinnedItem(imageId) {
-  return new Promise((resolve, reject) => {
-    if (!db) {
-      reject(new Error('Database not initialized. Call initDB() first.'));
-      return;
+export async function deletePinnedItem(imageId) {
+  try {
+    // Delete from Firebase if enabled
+    if (useFirebase) {
+      try {
+        await deletePinnedItemFromFirestore(imageId);
+      } catch (firebaseError) {
+        console.error('[Firebase] Error deleting pin:', firebaseError);
+        // Continue with IndexedDB deletion even if Firebase fails
+      }
     }
-
-    try {
-      const transaction = db.transaction([IMAGES_STORE, METADATA_STORE], 'readwrite');
+    
+    // Always delete from IndexedDB
+    return new Promise((resolve, reject) => {
+      if (!db) {
+        reject(new Error('Database not initialized'));
+        return;
+      }
       
-      transaction.onerror = (event) => {
-        console.error('Transaction error:', event.target.error);
-        reject(event.target.error);
-      };
-      
-      transaction.oncomplete = () => {
-        console.log('Delete transaction completed successfully');
-        resolve();
-      };
-      
-      // Delete the image 
-      const imageStore = transaction.objectStore(IMAGES_STORE);
-      imageStore.delete(imageId);
-      
-      // Delete all metadata records with this imageId
-      const metadataStore = transaction.objectStore(METADATA_STORE);
-      const index = metadataStore.index('imageId');
-      const request = index.getAllKeys(imageId);
-      
-      request.onsuccess = () => {
-        const keys = request.result;
-        keys.forEach(key => {
-          metadataStore.delete(key);
-        });
-      };
-      
-    } catch (error) {
-      console.error('Error in deletePinnedItem:', error);
-      reject(error);
-    }
-  });
+      try {
+        const transaction = db.transaction([METADATA_STORE, IMAGES_STORE], 'readwrite');
+        const metadataStore = transaction.objectStore(METADATA_STORE);
+        const imageStore = transaction.objectStore(IMAGES_STORE);
+        const metadataIndex = metadataStore.index('imageId');
+        
+        // Find and delete metadata entries with matching imageId
+        const metadataRequest = metadataIndex.openCursor(IDBKeyRange.only(imageId));
+        
+        metadataRequest.onsuccess = (event) => {
+          const cursor = event.target.result;
+          if (cursor) {
+            cursor.delete();
+            cursor.continue();
+          }
+        };
+        
+        // Delete the image
+        imageStore.delete(imageId);
+        
+        transaction.oncomplete = () => {
+          console.log(`Successfully deleted pinned item with imageId: ${imageId}`);
+          resolve();
+        };
+        
+        transaction.onerror = (event) => {
+          console.error('Transaction error in deletePinnedItem:', event.target.error);
+          reject(event.target.error);
+        };
+      } catch (error) {
+        console.error('Error in deletePinnedItem:', error);
+        reject(error);
+      }
+    });
+  } catch (error) {
+    console.error('Error in deletePinnedItem:', error);
+    throw error;
+  }
 }
 
 /**

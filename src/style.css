@@ -311,9 +311,10 @@ button:focus-visible {
   box-shadow: 0 0 15px rgba(0, 0, 0, 0.15);
   opacity: 0;
   visibility: hidden;
+  /* Make visibility change immediately when opacity starts changing */
   transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), 
               opacity 0.3s ease,
-              visibility 0s linear 0.3s,
+              visibility 0s linear 0.3s, /* Delay matches opacity duration */
               border-radius 0.4s ease,
               padding 0.4s ease,
               width 0.4s ease,
@@ -325,15 +326,17 @@ button:focus-visible {
   min-height: 200px;
   overflow: hidden; /* Always hidden in bubble state */
   padding: 20px 20px 88px 20px; /* Extra padding at bottom to accommodate the button */
+  will-change: transform, opacity, visibility; /* Improve performance */
 }
 
 #contentPanel.panel-active {
   transform: translate(-50%, 0) scale(1);
   opacity: 1;
   visibility: visible;
+  /* Make visibility change immediately when showing panel */
   transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), 
               opacity 0.3s ease,
-              visibility 0s linear 0s,
+              visibility 0s linear 0s, /* No delay - immediate visibility */
               border-radius 0.4s ease,
               padding 0.4s ease,
               width 0.4s ease,
@@ -343,6 +346,7 @@ button:focus-visible {
               bottom 0.4s ease;
   height: auto; /* Let it size naturally based on content */
   overflow: hidden; /* No scrolling in bubble mode */
+  pointer-events: auto; /* Ensure interactions work */
 }
 
 #contentPanel.fullscreen-panel {
@@ -812,4 +816,509 @@ button:focus-visible {
 
 .button-flash {
   animation: button-flash 0.3s ease-in-out;
+}
+
+/* Settings and Admin Login Styles */
+#selectSettingsBtn {
+  background: transparent;
+  color: white;
+  border: none;
+  transition: background 0.2s;
+}
+
+#selectSettingsBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+#adminLoginPromptBtn,
+#signOutBtn,
+#backToContentTypesFromSettingsBtn,
+#adminLoginExecuteBtn,
+#backToSettingsFromLoginBtn {
+  padding: 12px 20px;
+  border-radius: 10px;
+  background: transparent;
+  color: white;
+  font-size: 16px;
+  width: 100%;
+  margin: 5px 0;
+  transition: background 0.2s;
+  border: none;
+}
+
+#adminLoginPromptBtn:hover,
+#signOutBtn:hover,
+#backToContentTypesFromSettingsBtn:hover,
+#adminLoginExecuteBtn:hover,
+#backToSettingsFromLoginBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+#adminLoginPromptBtn:active,
+#signOutBtn:active,
+#backToContentTypesFromSettingsBtn:active,
+#adminLoginExecuteBtn:active,
+#backToSettingsFromLoginBtn:active {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+#adminLoginExecuteBtn {
+  background: rgba(45, 107, 255, 0.2);
+  margin-top: 15px;
+}
+
+#adminLoginExecuteBtn:hover {
+  background: rgba(45, 107, 255, 0.3);
+}
+
+#adminLoginExecuteBtn:active {
+  background: rgba(45, 107, 255, 0.4);
+}
+
+#adminEmailInput,
+#adminPasswordInput {
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
+  margin: 8px 0;
+  font-size: 16px;
+  box-sizing: border-box;
+}
+
+#adminEmailInput::placeholder,
+#adminPasswordInput::placeholder {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+#adminEmailInput:focus,
+#adminPasswordInput:focus {
+  outline: none;
+  border-color: rgba(45, 107, 255, 0.5);
+  box-shadow: 0 0 0 2px rgba(45, 107, 255, 0.3);
+}
+
+#adminLoginErrorMsg {
+  color: #ff5252;
+  font-size: 14px;
+  margin: 5px 0;
+  text-align: center;
+  padding: 5px;
+  border-radius: 5px;
+  background-color: rgba(255, 82, 82, 0.1);
+}
+
+/* Admin Pins List View Styles */
+#adminPinsListView {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.admin-pins-list {
+  border-radius: 8px;
+  background-color: rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.admin-pins-list table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.admin-pins-list th {
+  text-align: left;
+  padding: 12px 15px;
+  background-color: rgba(0, 0, 0, 0.3);
+  color: white;
+  font-weight: bold;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.admin-pins-list td {
+  padding: 10px 15px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.admin-pins-list tr:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.admin-pins-list button {
+  background-color: rgba(220, 53, 69, 0.8);
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.admin-pins-list button:hover {
+  background-color: rgba(220, 53, 69, 1);
+}
+
+#adminManagePinsBtn {
+  background-color: rgba(0, 123, 255, 0.8);
+  color: white;
+  margin-bottom: 15px;
+}
+
+#adminManagePinsBtn:hover {
+  background-color: rgba(0, 123, 255, 1);
+}
+
+/* Vision Pro / Frosted Glass Styling */
+.frosted-glass {
+  background-color: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Settings View Styling */
+#settingsView {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  gap: 15px;
+}
+
+#settingsView h2 {
+  color: white;
+  text-align: center;
+  margin-bottom: 15px;
+}
+
+#settingsView h3 {
+  color: white;
+  margin: 5px 0 10px 0;
+}
+
+.settings-separator {
+  width: 100%;
+  height: 1px;
+  background-color: rgba(255, 255, 255, 0.2);
+  margin: 10px 0;
+}
+
+/* Storage Segmented Control */
+.segmented-control {
+  display: flex;
+  background-color: rgba(0, 0, 0, 0.3);
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+  margin: 5px 0 15px 0;
+  height: 40px;
+  width: 100%;
+}
+
+.segmented-control-label {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.segmented-control-option {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: white;
+  cursor: pointer;
+  z-index: 1;
+  transition: color 0.3s ease;
+  font-weight: 500;
+  padding: 8px 0;
+}
+
+.segmented-control-option.active {
+  color: #000;
+}
+
+.segmented-control-indicator {
+  position: absolute;
+  height: calc(100% - 6px);
+  top: 3px;
+  left: 3px;
+  width: calc(50% - 6px);
+  background-color: white;
+  border-radius: 8px;
+  transition: transform 0.3s ease;
+}
+
+.segmented-control[data-active="shared"] .segmented-control-indicator {
+  transform: translateX(100%);
+}
+
+/* Section Selector Styling */
+.section-selector {
+  margin: 20px 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0 5px;
+}
+
+.section-selector-label {
+  color: white;
+  font-weight: 500;
+  margin-bottom: 5px;
+}
+
+.section-selector select {
+  width: 100%;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
+  font-size: 16px;
+  transition: opacity 0.3s ease, border-color 0.3s ease;
+}
+
+.section-selector select:focus {
+  outline: none;
+  border-color: rgba(45, 107, 255, 0.5);
+}
+
+.section-selector.disabled .section-selector-label,
+.section-selector.disabled select {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Refresh Button */
+#refreshSharedPinsBtn {
+  position: fixed;
+  bottom: 40px;
+  right: 32px;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 85;
+  padding: 0;
+  transition: transform 0.2s ease, background-color 0.2s ease;
+  background-color: rgba(180, 180, 180, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+#refreshSharedPinsBtn:active {
+  transform: scale(0.9);
+}
+
+#refreshSharedPinsBtn .refresh-icon {
+  font-size: 24px;
+  color: white;
+  transition: transform 0.2s ease;
+}
+
+#refreshSharedPinsBtn.is-loading .refresh-icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Admin Badge */
+#adminBadge {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background-color: rgba(100, 100, 100, 0.7);
+  color: white;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-weight: bold;
+  font-size: 12px;
+  z-index: 1000;
+}
+
+/* Notifications */
+#notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  padding: 12px 20px;
+  border-radius: 10px;
+  color: white;
+  font-weight: 500;
+  z-index: 1000;
+  opacity: 0;
+  transition: opacity 0.3s ease-in-out;
+  background-color: rgba(100, 100, 100, 0.3);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  max-width: 90%;
+  word-wrap: break-word;
+}
+
+/* Admin Pins List View Styling */
+#adminPinsListView {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+#adminPinsListView h2 {
+  color: white;
+  text-align: center;
+  margin-bottom: 15px;
+}
+
+.admin-pins-list {
+  border-radius: 10px;
+  background-color: rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.admin-pins-list table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.admin-pins-list th {
+  text-align: left;
+  padding: 12px 15px;
+  background-color: rgba(0, 0, 0, 0.3);
+  color: white;
+  font-weight: bold;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  word-wrap: break-word;
+}
+
+.admin-pins-list td {
+  padding: 10px 15px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  word-wrap: break-word;
+  vertical-align: middle;
+}
+
+.admin-pins-list tr:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.admin-pins-list th:nth-child(1), .admin-pins-list td:nth-child(1) { width: 60px; } /* Photo */
+.admin-pins-list th:nth-child(2), .admin-pins-list td:nth-child(2) { width: 25%; } /* Section */
+.admin-pins-list th:nth-child(3), .admin-pins-list td:nth-child(3) { width: 25%; } /* User ID */
+.admin-pins-list th:nth-child(4), .admin-pins-list td:nth-child(4) { width: 25%; } /* Created */
+.admin-pins-list th:nth-child(5), .admin-pins-list td:nth-child(5) { width: 80px; } /* Actions */
+
+.admin-pins-list button {
+  background-color: rgba(220, 53, 69, 0.8);
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  width: 100%;
+}
+
+.admin-pins-list button:hover {
+  background-color: rgba(220, 53, 69, 1);
+}
+
+#adminManagePinsBtn {
+  background-color: rgba(0, 123, 255, 0.8);
+  color: white;
+  margin-bottom: 10px;
+  padding: 12px;
+  border-radius: 8px;
+}
+
+#adminManagePinsBtn:hover {
+  background-color: rgba(0, 123, 255, 1);
+}
+
+/* Responsive Styling for Admin Pins List */
+@media (max-width: 600px) {
+  .admin-pins-list th, .admin-pins-list td {
+    padding: 8px;
+    font-size: 14px;
+  }
+  
+  .admin-pins-list th:nth-child(1), .admin-pins-list td:nth-child(1) { width: 50px; } /* Photo */
+  .admin-pins-list th:nth-child(2), .admin-pins-list td:nth-child(2) { width: 20%; } /* Section */
+  .admin-pins-list th:nth-child(3), .admin-pins-list td:nth-child(3) { width: 20%; } /* User ID */
+  .admin-pins-list th:nth-child(4), .admin-pins-list td:nth-child(4) { width: 20%; } /* Created */
+  .admin-pins-list th:nth-child(5), .admin-pins-list td:nth-child(5) { width: 70px; } /* Actions */
+  
+  .admin-pins-list button {
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+}
+
+/* Fullscreen Panel Transition */
+.fullscreen-transition {
+  /* Smooth transitions between different fullscreen views */
+  transition: transform 0.3s ease, 
+              width 0.3s ease, 
+              height 0.3s ease, 
+              border-radius 0.3s ease,
+              opacity 0.3s ease,
+              padding 0.3s ease;
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Fullscreen Panel */
+#contentPanel.fullscreen-panel {
+  position: fixed;
+  border-radius: 20px 20px 0 0;
+  transform: translate(-50%, 0) scale(1); /* Always ensure scale is 1 */
+  transform-origin: bottom center;
+  width: 100%;
+  max-width: 100%;
+  height: 90vh;
+  max-height: 90vh;
+  bottom: 0;
+  padding: 20px;
+  overflow-y: auto;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* Transition helper class for returning from fullscreen to bubble */
+#contentPanel.returning-to-bubble {
+  /* Enhanced transitions for returning from fullscreen to bubble state */
+  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+              opacity 0.3s ease,
+              visibility 0s linear 0s, /* Immediate visibility */
+              border-radius 0.4s ease,
+              padding 0.4s ease,
+              width 0.4s ease,
+              max-width 0.4s ease,
+              height 0.4s ease,
+              max-height 0.4s ease,
+              bottom 0.4s ease !important;
+  /* Ensure the bubble properties are enforced */
+  transform-origin: bottom center !important;
+  opacity: 1;
+  visibility: visible;
 }

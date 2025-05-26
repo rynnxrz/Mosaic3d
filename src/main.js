@@ -1,11 +1,58 @@
 import './style.css'
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { initDB, savePinnedItem, loadPinnedItems, getAllPinnedPhotoMetadata } from './database.js';
+import { initDB, savePinnedItem, loadPinnedItems, getAllPinnedPhotoMetadata, getUserId } from './database.js';
+import { 
+  addSharedPin, 
+  loadSharedPins, 
+  getSharedPins, 
+  initFirebase, 
+  isCurrentUserAdmin, 
+  signInWithEmail, 
+  signOutUser, 
+  getAllSharedPinsForAdmin,
+  getCurrentFirebaseUserId,
+  uploadPhotoToStorage
+} from './firebase.js';
 
 window.addEventListener('DOMContentLoaded', () => {
   console.log('DOM fully loaded and parsed');
   console.log('Direct getElementById("canvas-container"):', document.getElementById('canvas-container'));
+  
+  // Initialize Firebase and database
+  Promise.all([
+    initFirebase().catch(error => {
+      console.error('Error initializing Firebase:', error);
+      return null;
+    }),
+    initDB().catch(error => {
+      console.error('Error initializing database:', error);
+      return null;
+    })
+  ]).then(([firebaseUser, _]) => {
+    if (firebaseUser) {
+      console.log('Firebase initialized with user ID:', firebaseUser.uid);
+      
+      // Check if the current user has admin privileges
+      isCurrentUserAdmin().then(isAdmin => {
+        console.log('Current user admin status:', isAdmin);
+        
+        // Store admin status in a global variable for use throughout the app
+        window.isAdmin = isAdmin;
+        
+        // If admin, show admin UI elements
+        if (isAdmin) {
+          showAdminUI();
+        }
+      });
+    }
+    
+    const userId = getUserId();
+    console.log('IndexedDB User ID:', userId);
+    
+    // Load shared pins after initialization
+    loadSharedPinsForCurrentSection();
+  });
   
   // Test if touch events are being recognized
   console.log('Touch events supported:', 'ontouchstart' in window);
@@ -108,6 +155,9 @@ window.addEventListener('DOMContentLoaded', () => {
   const contentTypeSelectView = getEl('contentTypeSelectView');
   const cameraModeView = getEl('cameraModeView');
   const imagePreviewView = getEl('imagePreviewView');
+  const settingsView = getEl('settingsView');
+  const adminLoginView = getEl('adminLoginView');
+  const adminPinsListView = getEl('adminPinsListView');
   const selectPhotoTypeBtn = getEl('selectPhotoTypeBtn');
   const selectTextTypeBtn = getEl('selectTextTypeBtn');
   const cameraPreview = getEl('cameraPreview');
@@ -535,94 +585,136 @@ window.addEventListener('DOMContentLoaded', () => {
   
   // --- Animation loop ---
 
+  // Define constant array of all panel view IDs for consistent management
+  const ALL_PANEL_VIEW_IDS = [
+    'contentTypeSelectView', 'cameraModeView', 'imagePreviewView',
+    'settingsView', 'adminLoginView', 'adminPinsListView'
+  ];
+  let currentActivePanelViewId = null;
+
   // Helper: show only one view in the panel
-  function showPanelView(viewId) {
-    // Get the current state
-    const isCurrentlyFullscreen = contentPanel && contentPanel.classList.contains('fullscreen-panel');
-    const willBeFullscreen = viewId === 'cameraModeView' || viewId === 'imagePreviewView';
-    
-    // If we're transitioning between fullscreen and bubble or vice versa,
-    // we need to handle the timing differently
-    if (isCurrentlyFullscreen !== willBeFullscreen) {
-      // First, hide all views during the transition
-      [contentTypeSelectView, cameraModeView, imagePreviewView].forEach(v => {
-        if (v) v.classList.remove('active');
-      });
-      
-      if (contentPanel) {
-        if (willBeFullscreen) {
-          // Going from bubble to fullscreen
-          contentPanel.classList.add('fullscreen-panel');
-          // Delay showing the new view slightly to allow transition to start
-          setTimeout(() => {
-            const view = getEl(viewId);
-            if (view) view.classList.add('active');
-          }, 50);
-        } else {
-          // Going from fullscreen to bubble
-          // Wait for transition to complete before removing fullscreen
-          setTimeout(() => {
-            contentPanel.classList.remove('fullscreen-panel');
-            // Delay showing the new view slightly
-            setTimeout(() => {
-              const view = getEl(viewId);
-              if (view) view.classList.add('active');
-            }, 50);
-          }, 50);
-        }
-      }
-    } else {
-      // Normal view switch within the same panel type (fullscreen or bubble)
-      [contentTypeSelectView, cameraModeView, imagePreviewView].forEach(v => {
-        if (v) v.classList.remove('active');
-      });
-      
-      const view = getEl(viewId);
-      if (view) view.classList.add('active');
-      
-      // Update fullscreen state
-      if (contentPanel) {
-        if (willBeFullscreen) {
-          contentPanel.classList.add('fullscreen-panel');
-        } else {
-          contentPanel.classList.remove('fullscreen-panel');
-        }
-      }
+  function showPanelView(viewIdToShow) {
+    const panel = contentPanel;
+    if (!panel) {
+      console.error("#contentPanel is not found in showPanelView");
+      return;
+    }
+
+    // Optimization: If the view is already active, do nothing.
+    if (currentActivePanelViewId === viewIdToShow) {
+      console.log(`View ${viewIdToShow} is already active.`);
+      // Still ensure fullscreen class is correct if called directly
+      const isFullscreen = ['cameraModeView', 'imagePreviewView', 'settingsView', 'adminLoginView', 'adminPinsListView'].includes(viewIdToShow);
+      panel.classList.toggle('fullscreen-panel', isFullscreen);
+      return;
     }
     
-    // If showing image preview, ensure the scale slider reflects the current scale
-    if (viewId === 'imagePreviewView' && photoScaleSlider && photoScaleValue) {
+    console.log(`Changing panel view from ${currentActivePanelViewId} to: ${viewIdToShow}`);
+
+    ALL_PANEL_VIEW_IDS.forEach(id => {
+      const viewElement = getEl(id); // Using getEl utility
+      if (viewElement) {
+        if (id === viewIdToShow) {
+          viewElement.classList.add('active');
+          // Explicitly set display to ensure it shows, matching .view.active CSS
+          viewElement.style.display = 'flex'; 
+        } else {
+          viewElement.classList.remove('active');
+          // CRITICAL: Explicitly hide inactive views with inline style
+          viewElement.style.display = 'none';
+        }
+      }
+    });
+
+    currentActivePanelViewId = viewIdToShow;
+
+    const isFullscreen = ['cameraModeView', 'imagePreviewView', 'settingsView', 'adminLoginView', 'adminPinsListView'].includes(viewIdToShow);
+
+    if (isFullscreen) {
+      panel.classList.add('fullscreen-panel');
+    } else {
+      panel.classList.remove('fullscreen-panel');
+    }
+
+    panel.classList.remove('returning-to-bubble');
+    panel.classList.remove('fullscreen-transition');
+
+    if (viewIdToShow === 'imagePreviewView' && photoScaleSlider && photoScaleValue) {
       photoScaleSlider.value = currentPhotoScale;
       photoScaleValue.textContent = currentPhotoScale.toFixed(1) + 'x';
     }
+    console.log(`Panel view set to: ${viewIdToShow}, Fullscreen: ${isFullscreen}`);
   }
   
   function openPanel() {
-    if (contentPanel) contentPanel.classList.add('panel-active');
+    console.log('Opening panel...');
+    
+    if (contentPanel) {
+      // More aggressively clear all inline styles that might interfere
+      contentPanel.removeAttribute('style');
+      
+      // Ensure panel is reset to bubble state
+      contentPanel.classList.remove('fullscreen-panel');
+      contentPanel.classList.remove('fullscreen-transition');
+      contentPanel.classList.remove('returning-to-bubble');
+      
+      // Set correct transform-origin for bubble animation
+      contentPanel.style.transformOrigin = 'bottom center';
+      
+      // Force a browser reflow to ensure styles are applied before animation starts
+      contentPanel.offsetHeight;
+      
+      // Add panel-active to trigger the appearance animation
+      contentPanel.classList.add('panel-active');
+    }
+    
     if (addContentBtn) {
       addContentBtn.classList.add('is-close-icon');
     }
     
-    // Hide joystick when panel is open (handled by CSS now)
-    
+    // Show the content type selection view
     showPanelView('contentTypeSelectView');
   }
   
   function closePanel() {
+    console.log('Closing panel...');
+    
+    // IMPORTANT: Reset to the default view INTERNALLY FIRST.
+    // showPanelView will set settingsView etc. to style.display = 'none'.
+    showPanelView('contentTypeSelectView');
+    
     if (contentPanel) {
+      // Remove all panel state classes
       contentPanel.classList.remove('panel-active');
       contentPanel.classList.remove('fullscreen-panel');
+      contentPanel.classList.remove('returning-to-bubble');
+      contentPanel.classList.remove('fullscreen-transition');
+      
+      // Reset relevant inline styles
+      contentPanel.style.opacity = '';
+      contentPanel.style.visibility = '';
+      contentPanel.style.transition = '';
+      
+      // Optional: Clean up inline styles after the CSS close animation completes.
+      // The duration should match your CSS transition for closing.
+      setTimeout(() => {
+        if (contentPanel && !contentPanel.classList.contains('panel-active')) {
+          // Check if it wasn't reopened
+          contentPanel.style.transform = ''; // Let CSS define the default hidden transform
+        }
+      }, 400); // Adjust time to match panel close animation duration
     }
+    
     if (addContentBtn) {
       addContentBtn.classList.remove('is-close-icon');
     }
     
-    // Show joystick when panel is closed (handled by CSS now)
-    
-    showPanelView('contentTypeSelectView');
+    // Clean up resources
     stopCamera();
     processedImageBlob = null;
-    imagePreview.src = '';
+    if (imagePreview) imagePreview.src = '';
+    
+    console.log('Panel closed. Internal view reset to contentTypeSelectView.');
   }
   
   function stopCamera() {
@@ -818,7 +910,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   // Update the existing createPhotoPlane function to save to DB
-  function createPhotoPlane(imageBlobToSave, photoTransform, creatorViewpoint, photoScale, photoAspectRatio) {
+  function createPhotoPlane(imageBlobToSave, photoTransform, creatorViewpoint, photoScale, photoAspectRatio, customImageId = null) {
     // Validation and logging
     if (!imageBlobToSave) {
       console.error('Cannot create photo plane: imageBlobToSave is null');
@@ -884,9 +976,9 @@ window.addEventListener('DOMContentLoaded', () => {
       pinnedPhotoMesh.quaternion.copy(photoTransform.quaternion);
       pinnedPhotoMesh.scale.copy(photoTransform.scale);
       
-      // Generate a unique image ID
-      const imageId = `photo_${Date.now()}_${pinnedPhotoCounter++}`;
-      console.log(`Generated imageId: ${imageId}`);
+      // Generate a unique image ID or use provided one
+      const imageId = customImageId || `photo_${Date.now()}_${pinnedPhotoCounter++}`;
+      console.log(`Using imageId: ${imageId} ${customImageId ? '(custom provided)' : '(auto-generated)'}`);
       
       // Store metadata
       pinnedPhotoMesh.userData = {
@@ -953,7 +1045,7 @@ window.addEventListener('DOMContentLoaded', () => {
         aspectRatio: aspectRatio
       };
       
-      // Add creator viewpoint if available
+      // Add creator viewpoint if available AND valid
       if (creatorViewpoint && creatorViewpoint.position) {
         let qData = null;
         if (creatorViewpoint.quaternion) { // Ensure the THREE.Quaternion object itself exists
@@ -968,16 +1060,25 @@ window.addEventListener('DOMContentLoaded', () => {
             w: Number(ثلاثية_الابعاد_كواتيرنيون.w)
           };
           console.log('[DEBUG main.js createPhotoPlane] Prepared qData for DB: ', qData);
+        } else {
+          console.warn("[createPhotoPlane] Creator viewpoint exists but quaternion is missing.");
         }
         
+        // Create the position object first
         transformDataForDB.creatorViewpoint = {
           position: {
             x: creatorViewpoint.position.x,
             y: creatorViewpoint.position.y,
             z: creatorViewpoint.position.z
-          },
-          quaternion: qData // Assign the explicitly created plain object or null
+          }
         };
+        
+        // Only add quaternion if it exists
+        if (qData) {
+          transformDataForDB.creatorViewpoint.quaternion = qData;
+        }
+      } else {
+        console.log('[createPhotoPlane] No valid creator viewpoint data available for database.');
       }
       
       // Save to database with scale information and viewpoint
@@ -1797,33 +1898,190 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   // Function to complete the placement process
-  function completePlacement() {
+  async function completePlacement() {
     console.log('Completing photo placement');
     
+    // Initial checks (using the outer scope finalPhotoTransform for now)
     if (!finalPhotoTransform) {
-      console.error('finalPhotoTransform is null, cannot complete placement');
+      console.error('finalPhotoTransform is null at the start of completePlacement. Aborting.');
+      showNotification('Error: Pin transform data is missing.', 'error');
+      togglePinningMode(false); // Reset UI
       return;
     }
     
     if (!processedImageBlob) {
-      console.error('processedImageBlob is null, cannot complete placement');
+      console.error('processedImageBlob is null at the start of completePlacement. Aborting.');
+      showNotification('Error: Pin image data is missing.', 'error');
+      togglePinningMode(false); // Reset UI
       return;
     }
+    
+    // --- Snapshot critical variables ----
+    const capturedTransform = { // Deep clone to be safe
+      position: finalPhotoTransform.position.clone(),
+      quaternion: finalPhotoTransform.quaternion.clone(),
+      scale: finalPhotoTransform.scale.clone()
+    };
     
     // Create creator viewpoint object if viewpoint was recorded
     const creatorViewpoint = recordedCreatorPosition && recordedCreatorQuaternion ? 
       { position: recordedCreatorPosition, quaternion: recordedCreatorQuaternion } : null;
     
-    // Call the refactored createPhotoPlane
-    createPhotoPlane(
-      processedImageBlob,
-      finalPhotoTransform,
-      creatorViewpoint,
-      finalPhotoTransform.scale.x, // Use the scale from the transform
-      currentPreviewImageAspectRatio
-    );
+    const capturedCreatorViewpoint = creatorViewpoint ? { // Deep clone
+      position: creatorViewpoint.position.clone(),
+      // Only clone quaternion if it exists
+      quaternion: creatorViewpoint.quaternion ? creatorViewpoint.quaternion.clone() : null 
+    } : null;
     
-    // Reset all state variables
+    const capturedProcessedImageBlob = processedImageBlob;
+    const capturedPreviewAspectRatio = currentPreviewImageAspectRatio;
+    const imageIdForPin = `photo_${Date.now()}_${pinnedPhotoCounter++}`; // Generate ID once
+
+    console.log('Initial capturedCreatorViewpoint:', capturedCreatorViewpoint ? 
+      { position: capturedCreatorViewpoint.position.toArray(), 
+        quaternion: capturedCreatorViewpoint.quaternion ? capturedCreatorViewpoint.quaternion.toArray() : null } : null);
+    console.log('Initial recordedCreatorQuaternion (from outer scope, for reference):', 
+      recordedCreatorQuaternion ? recordedCreatorQuaternion.toArray() : null);
+    
+    // Nested function for local save, using captured state
+    function saveToLocalStorageLocal() {
+      console.log("Attempting to save to local storage with captured state.");
+      if (!capturedTransform) {
+        console.error("saveToLocalStorageLocal: capturedTransform is null. Aborting.");
+        showNotification('Error: Could not save pin locally (missing transform data).', 'error');
+        return;
+      }
+      if (!capturedProcessedImageBlob) {
+        console.error("saveToLocalStorageLocal: capturedProcessedImageBlob is null. Aborting.");
+        showNotification('Error: Could not save pin locally (missing image data).', 'error');
+        return;
+      }
+
+      createPhotoPlane(
+        capturedProcessedImageBlob,
+        capturedTransform,
+        capturedCreatorViewpoint, // Pass the captured (potentially null) viewpoint
+        capturedTransform.scale.x,
+        capturedPreviewAspectRatio,
+        imageIdForPin // Pass the pre-generated imageId
+      );
+    }
+    
+    if (useSharedSpace) {
+      // Get the current Firebase user ID
+      const firebaseUserId = getCurrentFirebaseUserId();
+      
+      if (!firebaseUserId) {
+        console.error('User not signed in. Cannot save to shared space.');
+        showNotification('User not signed in. Cannot save to shared space. Saving locally.', 'warning');
+        saveToLocalStorageLocal();
+        return;
+      }
+      
+      if (!capturedProcessedImageBlob) {
+        console.error('No image data to upload. Cannot save shared pin.');
+        showNotification('No image data to upload. Cannot save shared pin.', 'error');
+        return;
+      }
+      
+      // Create a unique filename for the image
+      const uniqueFileName = `pin_${imageIdForPin}_${Date.now()}.jpg`;
+      
+      // Show uploading notification
+      showNotification('Uploading photo for shared pin...', 'info');
+      
+      try {
+        // Upload the image to Firebase Storage
+        const downloadURL = await uploadPhotoToStorage(firebaseUserId, capturedProcessedImageBlob, uniqueFileName);
+        console.log('Photo uploaded to Firebase Storage. URL:', downloadURL);
+        
+        // Extract Euler rotation from quaternion for better compatibility
+        const euler = new THREE.Euler().setFromQuaternion(capturedTransform.quaternion, 'YXZ');
+        
+        // Prepare shared pin data with the Firebase Storage URL
+        const sharedPinData = {
+          photoURL: downloadURL, // Use the Firebase Storage URL instead of blob URL
+          position: {
+            x: capturedTransform.position.x,
+            y: capturedTransform.position.y,
+            z: capturedTransform.position.z
+          },
+          rotation: {
+            x: euler.x,
+            y: euler.y,
+            z: euler.z
+          },
+          sectionId: currentSectionId, // Use the current section ID
+          scale: capturedTransform.scale.x, // Assuming uniform scale
+          aspectRatio: capturedPreviewAspectRatio
+        };
+        
+        // Robustly add creator viewpoint data
+        if (capturedCreatorViewpoint && capturedCreatorViewpoint.position) {
+          const creatorPos = capturedCreatorViewpoint.position;
+          sharedPinData.creatorViewpoint = {
+            position: { x: creatorPos.x, y: creatorPos.y, z: creatorPos.z }
+          };
+          // Only add quaternion if it exists on the captured viewpoint
+          if (capturedCreatorViewpoint.quaternion) {
+            const viewpointEuler = new THREE.Euler().setFromQuaternion(capturedCreatorViewpoint.quaternion, 'YXZ');
+            sharedPinData.creatorViewpoint.rotation = { 
+              x: viewpointEuler.x, 
+              y: viewpointEuler.y, 
+              z: viewpointEuler.z 
+            };
+          } else {
+            console.warn("[completePlacement] Captured creator viewpoint has position but no quaternion for shared pin.");
+          }
+        }
+        
+        // Save to Firestore shared pins collection
+        const docId = await addSharedPin(sharedPinData);
+        console.log(`Pin saved to shared space with ID: ${docId}`);
+        
+        // Show success notification to user
+        showNotification('Pin saved to shared space', 'success');
+        
+        // Refresh the pins in the scene to include the new one
+        loadSharedPinsForCurrentSection();
+      } catch (error) {
+        console.error('Failed to upload photo or save pin to shared space:', error);
+        // Show error notification to user
+        showNotification('Failed to save shared pin: ' + error.message, 'error');
+        
+        // Fallback to local storage if shared save fails
+        saveToLocalStorageLocal();
+      }
+    } else {
+      // Save to local storage using the existing method with captured state
+      saveToLocalStorageLocal();
+    }
+    
+    // Legacy saveToLocalStorage function kept for compatibility with any existing calls
+    // but we primarily use saveToLocalStorageLocal() inside completePlacement
+    function saveToLocalStorage(blobToSave, transformToSave, viewpointToSave, currentAspectRatio) {
+      console.log("Attempting to save to local storage.");
+      if (!transformToSave) {
+        console.error("saveToLocalStorage called with null transformToSave. Aborting local save.");
+        showNotification('Error: Could not save pin locally (missing transform data).', 'error');
+        return;
+      }
+      if (!blobToSave) {
+        console.error("saveToLocalStorage called with null blobToSave. Aborting local save.");
+        showNotification('Error: Could not save pin locally (missing image data).', 'error');
+        return;
+      }
+
+      createPhotoPlane(
+        blobToSave,
+        transformToSave,
+        viewpointToSave,
+        transformToSave.scale.x, // Access scale from the passed parameter
+        currentAspectRatio
+      );
+    }
+    
+    // Reset all state variables AT THE VERY END
     pinningMode = false;
     currentPlacementStage = 'none';
     
@@ -1831,6 +2089,7 @@ window.addEventListener('DOMContentLoaded', () => {
     if (tempPreviewPlane) {
       scene.remove(tempPreviewPlane);
       tempPreviewPlane.geometry.dispose();
+      if (tempPreviewPlane.material.map) tempPreviewPlane.material.map.dispose();
       tempPreviewPlane.material.dispose();
       tempPreviewPlane = null;
     }
@@ -1855,14 +2114,37 @@ window.addEventListener('DOMContentLoaded', () => {
     if (skipViewpointBtn) skipViewpointBtn.style.display = 'none';
     if (completePlacementBtn) completePlacementBtn.style.display = 'none';
     if (stageIndicator) stageIndicator.style.display = 'none';
+    if (fineAdjustmentPanel) fineAdjustmentPanel.style.display = 'none';
     
     // Remove the cancel pinning button if it exists
     const cancelPinBtn = document.getElementById('cancelPinningBtn');
-    if (cancelPinBtn) {
-      document.body.removeChild(cancelPinBtn);
+    if (cancelPinBtn && cancelPinBtn.parentNode) {
+      cancelPinBtn.parentNode.removeChild(cancelPinBtn);
     }
     
     console.log('Photo placement completed and all state reset');
+  }
+  
+  // Function to show notification to the user
+  function showNotification(message, type = 'info') {
+    // Create notification element if it doesn't exist
+    let notification = document.getElementById('notification');
+    if (!notification) {
+      notification = document.createElement('div');
+      notification.id = 'notification';
+      document.body.appendChild(notification);
+    }
+    
+    // Set content without icon (per UI refinement)
+    notification.innerHTML = message;
+    
+    // Show notification
+    notification.style.opacity = '1';
+    
+    // Hide notification after 3 seconds
+    setTimeout(() => {
+      notification.style.opacity = '0';
+    }, 3000);
   }
 
   // Function to load and prepare viewpoints for review mode
@@ -2435,5 +2717,928 @@ window.addEventListener('DOMContentLoaded', () => {
       // Hide the content panel for a more focused experience
       closePanel();
     });
+  }
+
+  // Define a variable for the current section ID
+  // For testing, hardcode to "public_event_1"
+  let currentSectionId = "public_event_1";
+  
+  // Available sections
+  const availableSections = [
+    { id: "public_event_1", name: "Public Event 1" },
+    { id: "shared_room_2", name: "Shared Room 2" },
+    { id: "team_space_3", name: "Team Space 3" }
+  ];
+  
+  // Flag to determine if pins should be saved to shared space
+  let useSharedSpace = true;
+
+  // Array to track shared pins in the scene
+  let sharedPinsInScene = [];
+  
+  /**
+   * Create a section selector dropdown
+   * This allows users to switch between different shared sections
+   */
+  function createSectionSelector() {
+  // First, check if there's an existing selector to remove
+  const existingSelector = document.getElementById('sectionSelector');
+  if (existingSelector && existingSelector.parentNode) {
+    existingSelector.parentNode.removeChild(existingSelector);
+  }
+  
+  // Create container
+  const container = document.createElement('div');
+  container.id = 'sectionSelector';
+  container.className = 'section-selector' + (!useSharedSpace ? ' disabled' : '');
+  
+  // Create label
+  const label = document.createElement('div');
+  label.className = 'section-selector-label';
+  label.textContent = 'Section:';
+  container.appendChild(label);
+  
+  // Create select element
+  const select = document.createElement('select');
+  select.id = 'sectionSelect';
+  select.disabled = !useSharedSpace;
+  
+  // Add options for each available section
+  availableSections.forEach(section => {
+    const option = document.createElement('option');
+    option.value = section.id;
+    option.textContent = section.name;
+    option.selected = section.id === currentSectionId;
+    select.appendChild(option);
+  });
+  
+  // Add event listener
+  select.addEventListener('change', function() {
+    if (!useSharedSpace) return; // Don't do anything if shared space is not enabled
+    
+    const newSectionId = this.value;
+    if (newSectionId !== currentSectionId) {
+      currentSectionId = newSectionId;
+      showNotification(`Switched to section: ${availableSections.find(s => s.id === newSectionId).name}`, 'info');
+      loadSharedPinsForCurrentSection();
+    }
+  });
+  
+  // Add select to container
+  container.appendChild(select);
+  
+  return container;
+}
+  
+  // Create the section selector
+  createSectionSelector();
+  
+  /**
+   * Load shared pins for the current section
+   * This function fetches pins from Firestore and displays them in the scene
+   */
+  function loadSharedPinsForCurrentSection() {
+    console.log(`Loading shared pins for section: ${currentSectionId}`);
+    
+    // Show loading indicator
+    showNotification('Loading shared pins...', 'info');
+    
+    // Clear existing shared pins from the scene
+    clearSharedPinsFromScene();
+    
+    // Fetch shared pins from Firestore
+    getSharedPins(currentSectionId)
+      .then(pins => {
+        console.log(`Fetched ${pins.length} shared pins for section: ${currentSectionId}`);
+        
+        // Display pins in the scene
+        pins.forEach(pin => {
+          const pinMesh = createSharedPinMesh(pin);
+          if (pinMesh) {
+            sharedPinsInScene.push(pinMesh);
+          }
+        });
+        
+        // Show success notification
+        if (pins.length > 0) {
+          showNotification(`Loaded ${pins.length} shared pins`, 'success');
+        } else {
+          showNotification('No shared pins found in this section', 'info');
+        }
+      })
+      .catch(error => {
+        console.error('Error loading shared pins:', error);
+        showNotification('Failed to load shared pins', 'error');
+      });
+  }
+  
+  /**
+   * Clear shared pins from the scene
+   * This function removes all shared pins from the Three.js scene
+   */
+  function clearSharedPinsFromScene() {
+    console.log('Clearing shared pins from scene');
+    
+    // Remove each shared pin mesh from the scene
+    sharedPinsInScene.forEach(mesh => {
+      if (mesh && scene.children.includes(mesh)) {
+        scene.remove(mesh);
+        
+        // Dispose of geometry and material to free memory
+        if (mesh.geometry) mesh.geometry.dispose();
+        if (mesh.material) {
+          if (Array.isArray(mesh.material)) {
+            mesh.material.forEach(material => material.dispose());
+          } else {
+            mesh.material.dispose();
+          }
+        }
+      }
+    });
+    
+    // Clear the array
+    sharedPinsInScene = [];
+  }
+  
+  /**
+   * Create a mesh for a shared pin
+   * @param {Object} pin - The pin data from Firestore
+   * @returns {THREE.Mesh} The created mesh
+   */
+  function createSharedPinMesh(pin) {
+    console.log('Creating mesh for shared pin:', pin.id);
+    
+    try {
+      // Skip if missing required data
+      if (!pin.position || !pin.rotation) {
+        console.error('Pin is missing position or rotation data:', pin);
+        return null;
+      }
+      
+      // Create a texture loader
+      const textureLoader = new THREE.TextureLoader();
+      
+      // Load the texture from the photoURL
+      // Note: In a production app, you might want to handle loading errors
+      const texture = textureLoader.load(
+        pin.photoURL,
+        // onLoad callback
+        () => console.log(`Texture loaded for pin: ${pin.id}`),
+        // onProgress callback (not used)
+        undefined,
+        // onError callback
+        (err) => console.error(`Error loading texture for pin ${pin.id}:`, err)
+      );
+      
+      // Calculate dimensions
+      const width = BASE_PHOTO_WIDTH * (pin.scale || 1.0);
+      const height = width / (pin.aspectRatio || 1.0);
+      
+      // Create geometry
+      const geometry = new THREE.PlaneGeometry(width, height);
+      
+      // Create material
+      const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        side: THREE.DoubleSide,
+        transparent: true
+      });
+      
+      // Create mesh
+      const mesh = new THREE.Mesh(geometry, material);
+      
+      // Set position
+      mesh.position.set(
+        pin.position.x,
+        pin.position.y,
+        pin.position.z
+      );
+      
+      // Set rotation
+      mesh.rotation.set(
+        pin.rotation.x,
+        pin.rotation.y,
+        pin.rotation.z
+      );
+      
+      // Store pin data in mesh userData
+      mesh.userData = {
+        id: pin.id,
+        isSharedPin: true,
+        userId: pin.userId,
+        sectionId: pin.sectionId,
+        createdAt: pin.createdAt
+      };
+      
+      // Add creator viewpoint if available
+      if (pin.creatorViewpoint) {
+        mesh.userData.creatorViewpoint = pin.creatorViewpoint;
+      }
+      
+      // Add to scene
+      scene.add(mesh);
+      
+      return mesh;
+    } catch (error) {
+      console.error(`Error creating mesh for pin ${pin.id}:`, error);
+      return null;
+    }
+  }
+  
+  // Add a button to refresh shared pins
+  function createRefreshButton() {
+    // First, check if there's an existing button to remove
+    const existingButton = document.getElementById('refreshSharedPinsBtn');
+    if (existingButton && existingButton.parentNode) {
+      existingButton.parentNode.removeChild(existingButton);
+    }
+    
+    const refreshBtn = document.createElement('button');
+    refreshBtn.id = 'refreshSharedPinsBtn';
+    refreshBtn.className = 'frosted-glass';
+    
+    // Create refresh icon using Material Symbols
+    const refreshIcon = document.createElement('span');
+    refreshIcon.className = 'material-symbols-outlined refresh-icon';
+    refreshIcon.textContent = 'refresh';
+    refreshBtn.appendChild(refreshIcon);
+    
+    // Add event listener for click
+    refreshBtn.addEventListener('click', () => {
+      // Add loading class for animation
+      refreshBtn.classList.add('is-loading');
+      
+      // Load pins
+      loadSharedPinsForCurrentSection()
+        .then(() => {
+          // Success handling (if needed)
+          console.log('Successfully loaded shared pins');
+        })
+        .catch(error => {
+          // Error handling
+          console.error('Error loading pins:', error);
+          showNotification('Failed to load shared pins', 'error');
+        })
+        .finally(() => {
+          // Always remove loading class when done, regardless of success/failure
+          refreshBtn.classList.remove('is-loading');
+        });
+    });
+    
+    // Add to document body
+    document.body.appendChild(refreshBtn);
+    return refreshBtn;
+  }
+  
+  // Create the refresh button
+  createRefreshButton();
+
+  // Function to load shared pins from Firestore (old implementation)
+  function loadSharedPinsFromFirestore() {
+    console.log(`Loading shared pins from section: ${currentSectionId}`);
+    
+    loadSharedPins(currentSectionId)
+      .then(sharedPins => {
+        console.log(`Loaded ${sharedPins.length} shared pins`);
+        
+        // Process each shared pin
+        sharedPins.forEach(pin => {
+          createSharedPhotoPlane(pin);
+        });
+        
+        // Show notification if pins were loaded
+        if (sharedPins.length > 0) {
+          showNotification(`Loaded ${sharedPins.length} shared pins`, 'info');
+        }
+      })
+      .catch(error => {
+        console.error('Error loading shared pins:', error);
+        showNotification('Failed to load shared pins', 'error');
+      });
+  }
+  
+  // Function to create a photo plane from shared pin data (old implementation)
+  function createSharedPhotoPlane(pinData) {
+    console.log('Creating photo plane from shared pin data:', pinData);
+    
+    // Create a placeholder texture for now
+    // In a real app, you would load the image from the photoURL
+    const texture = new THREE.TextureLoader().load(pinData.photoURL);
+    
+    // Calculate plane dimensions based on scale and aspect ratio
+    const planeWidth = BASE_PHOTO_WIDTH * (pinData.scale || 1.0);
+    const planeHeight = planeWidth / (pinData.aspectRatio || 1.0);
+    
+    // Create geometry with the correct aspect ratio and scale
+    const planeGeo = new THREE.PlaneGeometry(planeWidth, planeHeight);
+    
+    // Create material with the texture
+    const planeMat = new THREE.MeshBasicMaterial({
+      map: texture,
+      side: THREE.DoubleSide,
+      transparent: true
+    });
+    
+    // Create mesh
+    const photoMesh = new THREE.Mesh(planeGeo, planeMat);
+    
+    // Set position
+    photoMesh.position.set(
+      pinData.position.x,
+      pinData.position.y,
+      pinData.position.z
+    );
+    
+    // Set rotation from Euler angles
+    photoMesh.rotation.set(
+      pinData.rotation.x,
+      pinData.rotation.y,
+      pinData.rotation.z
+    );
+    
+    // Store metadata in userData
+    photoMesh.userData = {
+      id: pinData.id,
+      userId: pinData.userId,
+      sectionId: pinData.sectionId,
+      isSharedPin: true,
+      createdAt: pinData.createdAt
+    };
+    
+    // Add creator viewpoint if available
+    if (pinData.creatorViewpoint) {
+      photoMesh.userData.creatorViewpoint = pinData.creatorViewpoint;
+    }
+    
+    // Add to scene
+    scene.add(photoMesh);
+    console.log(`Added shared pin to scene with ID: ${pinData.id}`);
+    
+    return photoMesh;
+  }
+
+  // Create a segmented control for shared space toggle instead of a toggle switch
+  function createSharedSpaceToggle() {
+    // First, check if there's an existing toggle to remove
+    const existingToggle = document.getElementById('sharedSpaceToggle');
+    if (existingToggle && existingToggle.parentNode) {
+      existingToggle.parentNode.removeChild(existingToggle);
+    }
+    
+    // Create container
+    const container = document.createElement('div');
+    container.className = 'storage-setting';
+    
+    // Create label
+    const label = document.createElement('div');
+    label.className = 'segmented-control-label';
+    label.textContent = 'Storage:';
+    container.appendChild(label);
+    
+    // Create segmented control
+    const segmentedControl = document.createElement('div');
+    segmentedControl.className = 'segmented-control';
+    segmentedControl.setAttribute('data-active', useSharedSpace ? 'shared' : 'local');
+    
+    // Create Local option
+    const localOption = document.createElement('div');
+    localOption.className = 'segmented-control-option' + (!useSharedSpace ? ' active' : '');
+    localOption.textContent = 'Local';
+    localOption.setAttribute('data-value', 'local');
+    
+    // Create Shared option
+    const sharedOption = document.createElement('div');
+    sharedOption.className = 'segmented-control-option' + (useSharedSpace ? ' active' : '');
+    sharedOption.textContent = 'Shared';
+    sharedOption.setAttribute('data-value', 'shared');
+    
+    // Create sliding indicator
+    const indicator = document.createElement('div');
+    indicator.className = 'segmented-control-indicator';
+    
+    // Add elements to segmented control
+    segmentedControl.appendChild(localOption);
+    segmentedControl.appendChild(sharedOption);
+    segmentedControl.appendChild(indicator);
+    
+    // Add event listeners
+    localOption.addEventListener('click', () => {
+      if (useSharedSpace) {
+        useSharedSpace = false;
+        segmentedControl.setAttribute('data-active', 'local');
+        localOption.classList.add('active');
+        sharedOption.classList.remove('active');
+        showNotification('Pins will be saved to local storage', 'info');
+        
+        // Update section selector disabled state
+        updateSectionSelectorState();
+      }
+    });
+    
+    sharedOption.addEventListener('click', () => {
+      if (!useSharedSpace) {
+        useSharedSpace = true;
+        segmentedControl.setAttribute('data-active', 'shared');
+        sharedOption.classList.add('active');
+        localOption.classList.remove('active');
+        showNotification('Pins will be saved to shared space', 'info');
+        
+        // Update section selector disabled state
+        updateSectionSelectorState();
+      }
+    });
+    
+    // Add segmented control to container
+    container.appendChild(segmentedControl);
+    
+    return container;
+  }
+  
+  // Create the shared space toggle
+  createSharedSpaceToggle();
+
+  /**
+   * Show admin-specific UI elements
+   * This function is called when the current user is verified as an admin
+   */
+  function showAdminUI() {
+    console.log('[showAdminUI] Showing admin UI elements. Current window.isAdmin:', window.isAdmin);
+    
+    // Ensure global admin flag is set
+    window.isAdmin = true;
+    console.log('[showAdminUI] Set window.isAdmin to true');
+    
+    // First, remove any existing admin UI elements
+    const existingAdminBadge = document.getElementById('adminBadge');
+    if (existingAdminBadge) {
+      console.log('[showAdminUI] Removing existing admin badge');
+      existingAdminBadge.remove();
+    }
+    
+    const existingManageButton = document.getElementById('managePinsBtn');
+    if (existingManageButton) {
+      console.log('[showAdminUI] Removing existing manage button');
+      existingManageButton.remove();
+    }
+    
+    // Create admin badge
+    const adminBadge = document.createElement('div');
+    adminBadge.id = 'adminBadge';
+    adminBadge.textContent = 'ADMIN';
+    adminBadge.style.position = 'fixed';
+    adminBadge.style.top = '20px';
+    adminBadge.style.right = '20px';
+    adminBadge.style.backgroundColor = 'rgba(220, 53, 69, 0.8)';
+    adminBadge.style.color = 'white';
+    adminBadge.style.padding = '5px 10px';
+    adminBadge.style.borderRadius = '4px';
+    adminBadge.style.fontWeight = 'bold';
+    adminBadge.style.fontSize = '12px';
+    adminBadge.style.zIndex = '1000';
+    document.body.appendChild(adminBadge);
+    
+    // Note: Fixed-position 'Manage Pins' button was removed as that functionality
+    // is now handled by the 'Manage All Pins' button in the settings view
+    
+    // Show a notification to confirm admin status
+    showNotification('Admin status verified', 'success');
+  }
+
+  // Add "Settings" button to contentTypeSelectView
+  if (contentTypeSelectView) {
+    const selectSettingsBtn = document.createElement('button');
+    selectSettingsBtn.id = 'selectSettingsBtn';
+    selectSettingsBtn.textContent = 'Settings';
+    selectSettingsBtn.addEventListener('click', () => {
+      showPanelView('settingsView');
+      populateSettingsView();
+    });
+    contentTypeSelectView.appendChild(selectSettingsBtn);
+  }
+
+  // Function to populate and manage the settingsView
+  function populateSettingsView() {
+    console.log('[populateSettingsView] Called. Current window.isAdmin:', window.isAdmin);
+    console.log('[populateSettingsView] Direct DOM check: #settingsView exists:', !!document.getElementById('settingsView'));
+    
+    // Check DOM state before accessing elements
+    const allViews = [
+      'contentTypeSelectView', 'cameraModeView', 'imagePreviewView',
+      'settingsView', 'adminLoginView', 'adminPinsListView'
+    ];
+    allViews.forEach(id => {
+      const el = document.getElementById(id);
+      console.log(`[populateSettingsView] View check: #${id} exists:`, !!el, 
+                  el ? `active:${el.classList.contains('active')}, display:${window.getComputedStyle(el).display}` : '');
+    });
+    
+    const settingsViewEl = getEl('settingsView'); // Use getEl to ensure fresh reference
+    if (!settingsViewEl) {
+      console.error("settingsView element not found in populateSettingsView");
+      return;
+    }
+    
+    // Clear any previous content
+    settingsViewEl.innerHTML = '';
+    
+    // Create heading
+    const settingsHeading = document.createElement('h2');
+    settingsHeading.textContent = 'Settings';
+    settingsViewEl.appendChild(settingsHeading);
+    
+    // 1. Add shared space toggle (previously created directly in body)
+    const sharedSpaceToggle = createSharedSpaceToggle();
+    settingsViewEl.appendChild(sharedSpaceToggle);
+    
+    // 2. Add section selector (previously created directly in body)
+    const sectionSelector = createSectionSelector();
+    settingsViewEl.appendChild(sectionSelector);
+    
+    // Add a separator
+    const separator1 = document.createElement('div');
+    separator1.className = 'settings-separator';
+    settingsViewEl.appendChild(separator1);
+    
+    // 3. Admin section - only visible if user is admin
+    if (window.isAdmin) {
+      console.log('[populateSettingsView] window.isAdmin is TRUE. Creating admin controls.');
+      // Admin heading
+      const adminHeading = document.createElement('h3');
+      adminHeading.textContent = 'Admin Controls';
+      settingsViewEl.appendChild(adminHeading);
+      
+      // Create Manage All Pins button
+      const adminManagePinsBtn = document.createElement('button');
+      adminManagePinsBtn.id = 'adminManagePinsBtn';
+      adminManagePinsBtn.textContent = 'Manage All Pins';
+      adminManagePinsBtn.addEventListener('click', () => {
+        showAdminPinsList();
+      });
+      settingsViewEl.appendChild(adminManagePinsBtn);
+    } else {
+      console.log('[populateSettingsView] window.isAdmin is FALSE. Admin controls not created.');
+    }
+    
+    // 4. Login/Logout section
+    if (!window.isAdmin) {
+      console.log('[populateSettingsView] Creating Admin Login button (window.isAdmin is false)');
+      // Create Admin Login button
+      const adminLoginPromptBtn = document.createElement('button');
+      adminLoginPromptBtn.id = 'adminLoginPromptBtn';
+      adminLoginPromptBtn.textContent = 'Admin Login';
+      adminLoginPromptBtn.addEventListener('click', () => {
+        showPanelView('adminLoginView');
+        populateAdminLoginView();
+      });
+      settingsViewEl.appendChild(adminLoginPromptBtn);
+    } else {
+      console.log('[populateSettingsView] Not creating Admin Login button (window.isAdmin is true)');
+    }
+    
+    // Create Sign Out button
+    const signOutBtn = document.createElement('button');
+    signOutBtn.id = 'signOutBtn';
+    signOutBtn.textContent = 'Sign Out';
+    signOutBtn.addEventListener('click', () => {
+      signOutUser()
+        .then(() => {
+          console.log('Signed out, reverting to anonymous user.');
+          showNotification('Signed out successfully', 'success');
+          
+          // If there's an admin badge visible, hide it since the admin is now signed out
+          const adminBadge = getEl('adminBadge');
+          if (adminBadge) {
+            console.log('[SignOut] Hiding admin badge');
+            adminBadge.style.display = 'none';
+          }
+          
+          // Remove the old fixed position button if it exists (legacy cleanup)
+          const oldManagePinsButton = getEl('managePinsBtn');
+          if (oldManagePinsButton && oldManagePinsButton.parentNode) {
+            console.log('[SignOut] Removing old fixed managePinsBtn from DOM');
+            oldManagePinsButton.parentNode.removeChild(oldManagePinsButton);
+          }
+          
+          // Return to the content type selection view
+          window.isAdmin = false;
+          console.log('[SignOut] Set window.isAdmin to false');
+          showPanelView('contentTypeSelectView');
+        })
+        .catch(error => {
+          console.error('Sign out failed:', error);
+          showNotification('Sign out failed', 'error');
+        });
+    });
+    settingsViewEl.appendChild(signOutBtn);
+    
+    // Add another separator
+    const separator2 = document.createElement('div');
+    separator2.className = 'settings-separator';
+    settingsViewEl.appendChild(separator2);
+    
+    // Create Back button
+    const backToContentTypesFromSettingsBtn = document.createElement('button');
+    backToContentTypesFromSettingsBtn.id = 'backToContentTypesFromSettingsBtn';
+    backToContentTypesFromSettingsBtn.textContent = 'Back';
+    backToContentTypesFromSettingsBtn.addEventListener('click', () => {
+      showPanelView('contentTypeSelectView');
+    });
+    settingsViewEl.appendChild(backToContentTypesFromSettingsBtn);
+  }
+
+  // Function to populate and manage the adminLoginView
+  function populateAdminLoginView() {
+    if (!adminLoginView) return;
+    
+    // Clear any previous content
+    adminLoginView.innerHTML = '';
+    
+    // Create email input
+    const adminEmailInput = document.createElement('input');
+    adminEmailInput.id = 'adminEmailInput';
+    adminEmailInput.type = 'email';
+    adminEmailInput.placeholder = 'Admin Email';
+    adminEmailInput.style.padding = '10px';
+    adminEmailInput.style.borderRadius = '8px';
+    adminEmailInput.style.border = 'none';
+    adminEmailInput.style.margin = '5px 0';
+    adminEmailInput.style.width = '100%';
+    adminEmailInput.style.boxSizing = 'border-box';
+    adminLoginView.appendChild(adminEmailInput);
+    
+    // Create password input
+    const adminPasswordInput = document.createElement('input');
+    adminPasswordInput.id = 'adminPasswordInput';
+    adminPasswordInput.type = 'password';
+    adminPasswordInput.placeholder = 'Admin Password';
+    adminPasswordInput.style.padding = '10px';
+    adminPasswordInput.style.borderRadius = '8px';
+    adminPasswordInput.style.border = 'none';
+    adminPasswordInput.style.margin = '5px 0';
+    adminPasswordInput.style.width = '100%';
+    adminPasswordInput.style.boxSizing = 'border-box';
+    adminLoginView.appendChild(adminPasswordInput);
+    
+    // Create error message element
+    const adminLoginErrorMsg = document.createElement('div');
+    adminLoginErrorMsg.id = 'adminLoginErrorMsg';
+    adminLoginErrorMsg.style.color = '#ff5252';
+    adminLoginErrorMsg.style.fontSize = '14px';
+    adminLoginErrorMsg.style.margin = '5px 0';
+    adminLoginErrorMsg.style.textAlign = 'center';
+    adminLoginErrorMsg.style.display = 'none';
+    adminLoginView.appendChild(adminLoginErrorMsg);
+    
+    // Create login button
+    const adminLoginExecuteBtn = document.createElement('button');
+    adminLoginExecuteBtn.id = 'adminLoginExecuteBtn';
+    adminLoginExecuteBtn.textContent = 'Login';
+    adminLoginExecuteBtn.addEventListener('click', () => {
+      // Get email and password from input fields
+      const email = adminEmailInput.value.trim();
+      const password = adminPasswordInput.value;
+      
+      // Clear any previous error messages
+      adminLoginErrorMsg.style.display = 'none';
+      
+      // Validate inputs
+      if (!email || !password) {
+        adminLoginErrorMsg.textContent = 'Please enter both email and password';
+        adminLoginErrorMsg.style.display = 'block';
+        return;
+      }
+      
+      // Attempt to sign in
+      console.log('[AdminLogin] Starting login process with email:', email);
+      signInWithEmail(email, password)
+        .then(() => {
+          console.log('[AdminLogin] Firebase authentication successful');
+          
+          // Clear inputs
+          adminEmailInput.value = '';
+          adminPasswordInput.value = '';
+          
+          // Check admin status and update UI
+          console.log('[AdminLogin] Now checking admin status via isCurrentUserAdmin()');
+          return isCurrentUserAdmin();
+        })
+        .then(isAdmin => {
+          if (isAdmin) {
+            window.isAdmin = true;
+            console.log('[AdminLoginSuccess] window.isAdmin is now true.');
+            showNotification('Admin login successful', 'success');
+            // Update UI to reflect admin status
+            showAdminUI();
+          } else {
+            window.isAdmin = false;
+            console.log('[AdminLoginSuccess] User logged in but not admin. window.isAdmin is false.');
+            showNotification('Logged in, but user is not an admin', 'warning');
+          }
+          
+          console.log('[AdminLoginSuccess] Before showPanelView, window.isAdmin =', window.isAdmin);
+          // Return to settings view
+          showPanelView('settingsView');
+          populateSettingsView();
+        })
+        .catch(error => {
+          console.error('Admin login failed:', error);
+          adminLoginErrorMsg.textContent = error.message || 'Login failed. Please check your credentials.';
+          adminLoginErrorMsg.style.display = 'block';
+        });
+    });
+    adminLoginView.appendChild(adminLoginExecuteBtn);
+    
+    // Create back button
+    const backToSettingsFromLoginBtn = document.createElement('button');
+    backToSettingsFromLoginBtn.id = 'backToSettingsFromLoginBtn';
+    backToSettingsFromLoginBtn.textContent = 'Back';
+    backToSettingsFromLoginBtn.addEventListener('click', () => {
+      // Return to settings view
+      showPanelView('settingsView');
+      populateSettingsView();
+    });
+    adminLoginView.appendChild(backToSettingsFromLoginBtn);
+  }
+
+  // Function to handle the admin pins list view
+  function showAdminPinsList() {
+    if (!adminPinsListView) return;
+    
+    // Clear the view
+    adminPinsListView.innerHTML = '';
+    
+    // Show loading state
+    const loadingElement = document.createElement('div');
+    loadingElement.textContent = 'Loading shared pins...';
+    loadingElement.style.textAlign = 'center';
+    loadingElement.style.padding = '20px';
+    loadingElement.style.color = 'white';
+    adminPinsListView.appendChild(loadingElement);
+    
+    // Show the pins list view
+    showPanelView('adminPinsListView');
+    
+    // Fetch all shared pins
+    getAllSharedPinsForAdmin()
+      .then(pins => {
+        // Clear the view
+        adminPinsListView.innerHTML = '';
+        
+        // Create heading
+        const heading = document.createElement('h2');
+        heading.textContent = 'All Shared Pins';
+        adminPinsListView.appendChild(heading);
+        
+        // Create back button
+        const backButton = document.createElement('button');
+        backButton.textContent = 'Back to Settings';
+        backButton.style.marginBottom = '20px';
+        backButton.addEventListener('click', () => {
+          showPanelView('settingsView');
+          populateSettingsView();
+        });
+        adminPinsListView.appendChild(backButton);
+        
+        // Create pins count info
+        const countInfo = document.createElement('div');
+        countInfo.textContent = `${pins.length} pins found`;
+        countInfo.style.marginBottom = '15px';
+        countInfo.style.textAlign = 'center';
+        countInfo.style.color = 'white';
+        adminPinsListView.appendChild(countInfo);
+        
+        // Create pins list container
+        const pinsListContainer = document.createElement('div');
+        pinsListContainer.className = 'admin-pins-list';
+        pinsListContainer.style.overflowY = 'auto';
+        pinsListContainer.style.maxHeight = 'calc(100vh - 200px)';
+        adminPinsListView.appendChild(pinsListContainer);
+        
+        if (pins.length === 0) {
+          const noPinsMessage = document.createElement('div');
+          noPinsMessage.textContent = 'No shared pins found.';
+          noPinsMessage.style.textAlign = 'center';
+          noPinsMessage.style.padding = '20px';
+          noPinsMessage.style.color = 'white';
+          pinsListContainer.appendChild(noPinsMessage);
+          return;
+        }
+        
+        // Create a table for pins
+        const pinsTable = document.createElement('table');
+        
+        // Create table header
+        const tableHead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        
+        const headers = ['Photo', 'Section', 'User ID', 'Created', 'Actions'];
+        headers.forEach(headerText => {
+          const header = document.createElement('th');
+          header.textContent = headerText;
+          headerRow.appendChild(header);
+        });
+        
+        tableHead.appendChild(headerRow);
+        pinsTable.appendChild(tableHead);
+        
+        // Create table body
+        const tableBody = document.createElement('tbody');
+        
+        // Add pins to the table
+        pins.forEach(pin => {
+          const row = document.createElement('tr');
+          row.setAttribute('data-id', pin.id);
+          
+          // Photo cell
+          const photoCell = document.createElement('td');
+          if (pin.photoURL) {
+            const thumbnail = document.createElement('img');
+            thumbnail.src = pin.photoURL;
+            thumbnail.style.width = '50px';
+            thumbnail.style.height = '50px';
+            thumbnail.style.objectFit = 'cover';
+            thumbnail.style.borderRadius = '4px';
+            thumbnail.style.cursor = 'pointer';
+            thumbnail.addEventListener('click', () => {
+              window.open(pin.photoURL, '_blank');
+            });
+            photoCell.appendChild(thumbnail);
+          } else {
+            photoCell.textContent = 'No photo';
+          }
+          row.appendChild(photoCell);
+          
+          // Section ID cell
+          const sectionCell = document.createElement('td');
+          sectionCell.textContent = pin.sectionId || 'Unknown';
+          row.appendChild(sectionCell);
+          
+          // User ID cell
+          const userIdCell = document.createElement('td');
+          userIdCell.textContent = pin.userId ? (pin.userId.substring(0, 8) + '...') : 'Unknown';
+          userIdCell.title = pin.userId || 'Unknown';
+          row.appendChild(userIdCell);
+          
+          // Created at cell
+          const createdAtCell = document.createElement('td');
+          createdAtCell.textContent = pin.createdAt ? pin.createdAt.toLocaleString() : 'Unknown';
+          row.appendChild(createdAtCell);
+          
+          // Actions cell
+          const actionsCell = document.createElement('td');
+          const deleteButton = document.createElement('button');
+          deleteButton.textContent = 'Delete';
+          deleteButton.setAttribute('data-id', pin.id);
+          
+          // Placeholder for delete functionality (would need a deleteSharedPin function in firebase.js)
+          deleteButton.addEventListener('click', () => {
+            alert(`Delete functionality not implemented yet. Pin ID: ${pin.id}`);
+          });
+          
+          actionsCell.appendChild(deleteButton);
+          row.appendChild(actionsCell);
+          
+          tableBody.appendChild(row);
+        });
+        
+        pinsTable.appendChild(tableBody);
+        pinsListContainer.appendChild(pinsTable);
+      })
+      .catch(error => {
+        // Show error
+        adminPinsListView.innerHTML = '';
+        
+        const errorMessage = document.createElement('div');
+        errorMessage.textContent = `Error loading pins: ${error.message}`;
+        errorMessage.style.color = 'red';
+        errorMessage.style.padding = '20px';
+        errorMessage.style.textAlign = 'center';
+        adminPinsListView.appendChild(errorMessage);
+        
+        // Create back button
+        const backButton = document.createElement('button');
+        backButton.textContent = 'Back to Settings';
+        backButton.addEventListener('click', () => {
+          showPanelView('settingsView');
+          populateSettingsView();
+        });
+        adminPinsListView.appendChild(backButton);
+      });
+  }
+
+  // Update section selector state based on shared space toggle
+  function updateSectionSelectorState() {
+    const sectionSelector = document.getElementById('sectionSelector');
+    if (sectionSelector) {
+      const select = document.getElementById('sectionSelect');
+      
+      if (useSharedSpace) {
+        sectionSelector.classList.remove('disabled');
+        if (select) select.disabled = false;
+      } else {
+        sectionSelector.classList.add('disabled');
+        if (select) select.disabled = true;
+      }
+    }
   }
 });
