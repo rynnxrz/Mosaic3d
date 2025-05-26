@@ -2,7 +2,7 @@
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, doc, setDoc, getDoc, getDocs, query, where, deleteDoc, addDoc, serverTimestamp, orderBy } from 'firebase/firestore';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 
 // Replace with your Firebase project configuration
 // You'll need to replace these values with the ones from your Firebase console
@@ -504,6 +504,67 @@ export async function uploadPhotoToStorage(userId, imageBlob, fileName) {
   } catch (error) {
     console.error('[Firebase] Error uploading photo to Storage:', error);
     throw error; // Re-throw the error to be handled by the caller
+  }
+}
+
+/**
+ * Delete a shared pin document from Firestore
+ * @param {string} pinId - The ID of the shared pin document to delete
+ * @returns {Promise<void>} A promise that resolves when the document is deleted
+ */
+export async function deleteSharedPinDoc(pinId) {
+  try {
+    // Check if user is admin
+    const isAdmin = await isCurrentUserAdmin();
+    if (!isAdmin) {
+      throw new Error('Unauthorized: Only admins can delete shared pins');
+    }
+
+    console.log(`[Firebase] Deleting shared pin document with ID: ${pinId}`);
+    
+    // Delete the document from the sharedPins collection
+    await deleteDoc(doc(db, SHARED_PINS_COLLECTION, pinId));
+    
+    console.log(`[Firebase] Successfully deleted shared pin document: ${pinId}`);
+    return true;
+  } catch (error) {
+    console.error(`[Firebase] Error deleting shared pin document ${pinId}:`, error);
+    throw error; // Re-throw to allow calling code to handle it
+  }
+}
+
+/**
+ * Delete an image file from Firebase Storage
+ * @param {string} storagePath - The path to the file in Firebase Storage
+ * @returns {Promise<void>} A promise that resolves when the file is deleted
+ */
+export async function deleteImageFromStorage(storagePath) {
+  try {
+    // Check if user is admin
+    const isAdmin = await isCurrentUserAdmin();
+    if (!isAdmin) {
+      throw new Error('Unauthorized: Only admins can delete files from Storage');
+    }
+
+    console.log(`[Firebase] Deleting image from Storage at path: ${storagePath}`);
+    
+    // Create a reference to the file
+    const storageRef = ref(storage, storagePath);
+    
+    // Delete the file
+    await deleteObject(storageRef);
+    
+    console.log(`[Firebase] Successfully deleted image from Storage: ${storagePath}`);
+    return true;
+  } catch (error) {
+    // Check if it's a "file not found" error, which we can consider non-critical
+    if (error.code === 'storage/object-not-found') {
+      console.warn(`[Firebase] File not found in Storage (${storagePath}). It may have been deleted already.`);
+      return true; // Consider this a "success" from a cleanup perspective
+    }
+    
+    console.error(`[Firebase] Error deleting image from Storage (${storagePath}):`, error);
+    throw error; // Re-throw to allow calling code to handle it
   }
 }
 

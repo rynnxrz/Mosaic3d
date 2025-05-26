@@ -12,7 +12,9 @@ import {
   signOutUser, 
   getAllSharedPinsForAdmin,
   getCurrentFirebaseUserId,
-  uploadPhotoToStorage
+  uploadPhotoToStorage,
+  deleteSharedPinDoc,
+  deleteImageFromStorage
 } from './firebase.js';
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -1995,12 +1997,17 @@ window.addEventListener('DOMContentLoaded', () => {
         const downloadURL = await uploadPhotoToStorage(firebaseUserId, capturedProcessedImageBlob, uniqueFileName);
         console.log('Photo uploaded to Firebase Storage. URL:', downloadURL);
         
+        // Store the storage path for later deletion capability
+        const storagePathForDB = `sharedPins_images/${firebaseUserId}/${uniqueFileName}`;
+        console.log('Storage path for Firebase Storage:', storagePathForDB);
+        
         // Extract Euler rotation from quaternion for better compatibility
         const euler = new THREE.Euler().setFromQuaternion(capturedTransform.quaternion, 'YXZ');
         
-        // Prepare shared pin data with the Firebase Storage URL
+        // Prepare shared pin data with the Firebase Storage URL and path
         const sharedPinData = {
           photoURL: downloadURL, // Use the Firebase Storage URL instead of blob URL
+          photoStoragePath: storagePathForDB, // Store the path for admin deletion capability
           position: {
             x: capturedTransform.position.x,
             y: capturedTransform.position.y,
@@ -2013,7 +2020,8 @@ window.addEventListener('DOMContentLoaded', () => {
           },
           sectionId: currentSectionId, // Use the current section ID
           scale: capturedTransform.scale.x, // Assuming uniform scale
-          aspectRatio: capturedPreviewAspectRatio
+          aspectRatio: capturedPreviewAspectRatio,
+          userId: firebaseUserId // Store who created it
         };
         
         // Robustly add creator viewpoint data
@@ -3590,9 +3598,62 @@ window.addEventListener('DOMContentLoaded', () => {
           deleteButton.textContent = 'Delete';
           deleteButton.setAttribute('data-id', pin.id);
           
-          // Placeholder for delete functionality (would need a deleteSharedPin function in firebase.js)
-          deleteButton.addEventListener('click', () => {
-            alert(`Delete functionality not implemented yet. Pin ID: ${pin.id}`);
+          // Delete button handler with confirmation
+          deleteButton.addEventListener('click', async () => {
+            if (confirm("Are you sure you want to delete this pin permanently? This action cannot be undone.")) {
+              console.log(`Attempting to delete pin with ID: ${pin.id} and storage path: ${pin.photoStoragePath || 'unknown'}`);
+              showNotification(`Deleting pin ${pin.id}...`, 'info');
+
+              try {
+                // Step 1: Delete Firestore document
+                await deleteSharedPinDoc(pin.id);
+                console.log(`Firestore document ${pin.id} deleted successfully.`);
+
+                // Step 2: Delete image from Storage if path exists
+                if (pin.photoStoragePath) {
+                  try {
+                    await deleteImageFromStorage(pin.photoStoragePath);
+                    console.log(`Storage file ${pin.photoStoragePath} deleted successfully.`);
+                  } catch (storageError) {
+                    console.error(`Failed to delete image from Storage (${pin.photoStoragePath}):`, storageError);
+                    // Optionally notify user, but proceed with UI cleanup if Firestore doc was deleted
+                    showNotification(`Pin data deleted, but failed to delete image file: ${storageError.message}`, 'warning');
+                  }
+                } else {
+                  console.warn(`No photoStoragePath found for pin ${pin.id}. Skipping storage file deletion.`);
+                }
+
+                // Step 3: Remove from UI table
+                const rowToRemove = row; // We already have the row reference
+                if (rowToRemove) {
+                  rowToRemove.remove();
+                  
+                  // Update the count info
+                  const currentCount = parseInt(countInfo.textContent.split(' ')[0]) - 1;
+                  countInfo.textContent = `${currentCount} pins found`;
+                }
+
+                // Step 4: Remove from 3D scene
+                const meshToRemove = sharedPinsInScene.find(mesh => mesh.userData.id === pin.id);
+                if (meshToRemove) {
+                  scene.remove(meshToRemove);
+                  if (meshToRemove.geometry) meshToRemove.geometry.dispose();
+                  if (meshToRemove.material) {
+                    if (meshToRemove.material.map) meshToRemove.material.map.dispose();
+                    meshToRemove.material.dispose();
+                  }
+                  sharedPinsInScene = sharedPinsInScene.filter(mesh => mesh.userData.id !== pin.id);
+                  console.log(`Removed mesh for pin ${pin.id} from scene.`);
+                } else {
+                  console.warn(`Could not find mesh in scene for pin ${pin.id} to remove.`);
+                }
+
+                showNotification(`Pin ${pin.id} deleted successfully!`, 'success');
+              } catch (firestoreError) {
+                console.error(`Failed to delete Firestore document for pin ${pin.id}:`, firestoreError);
+                showNotification(`Error deleting pin ${pin.id}: ${firestoreError.message}`, 'error');
+              }
+            }
           });
           
           actionsCell.appendChild(deleteButton);
