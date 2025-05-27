@@ -3025,8 +3025,8 @@ window.addEventListener('DOMContentLoaded', () => {
     // Clear existing shared pins from the scene
     clearSharedPinsFromScene();
     
-    // Fetch shared pins from Firestore
-    getSharedPins(currentSectionId)
+    // Fetch shared pins from Firestore and explicitly return the promise
+    return getSharedPins(currentSectionId)
       .then(pins => {
         console.log(`Fetched ${pins.length} shared pins for section: ${currentSectionId}`);
         
@@ -3044,10 +3044,15 @@ window.addEventListener('DOMContentLoaded', () => {
         } else {
           showNotification('No shared pins found in this section', 'info');
         }
+        
+        // Return the pins to maintain the promise chain
+        return pins;
       })
       .catch(error => {
         console.error('Error loading shared pins:', error);
         showNotification('Failed to load shared pins', 'error');
+        // Re-throw the error to maintain the promise chain
+        throw error;
       });
   }
   
@@ -3202,21 +3207,37 @@ window.addEventListener('DOMContentLoaded', () => {
       // Add loading class for animation
       refreshBtn.classList.add('is-loading');
       
-      // Load pins
-      loadSharedPinsForCurrentSection()
-        .then(() => {
-          // Success handling (if needed)
-          console.log('Successfully loaded shared pins');
-        })
-        .catch(error => {
-          // Error handling
-          console.error('Error loading pins:', error);
-          showNotification('Failed to load shared pins', 'error');
-        })
-        .finally(() => {
-          // Always remove loading class when done, regardless of success/failure
-          refreshBtn.classList.remove('is-loading');
-        });
+      // Add debug log to verify class is added
+      console.log('[RefreshButton] Adding is-loading class');
+      
+      // Load pins - ensure we always have a promise to work with
+      try {
+        // Store the promise result
+        const loadPromise = loadSharedPinsForCurrentSection();
+        
+        // Ensure we're working with a promise and handle all cases
+        Promise.resolve(loadPromise)
+          .then(() => {
+            // Success handling (if needed)
+            console.log('Successfully loaded shared pins');
+          })
+          .catch(error => {
+            // Error handling
+            console.error('Error loading pins:', error);
+            showNotification('Failed to load shared pins', 'error');
+          })
+          .finally(() => {
+            // Always remove loading class when done, regardless of success/failure
+            console.log('[RefreshButton] Finally block executed');
+            refreshBtn.classList.remove('is-loading');
+          });
+      } catch (error) {
+        // Handle any synchronous errors that might occur before the promise chain
+        console.error('Error before promise chain:', error);
+        showNotification('Failed to load shared pins', 'error');
+        console.log('[RefreshButton] Error handler executed');
+        refreshBtn.classList.remove('is-loading');
+      }
     });
     
     // Add to document body

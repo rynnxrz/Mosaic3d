@@ -119,10 +119,10 @@ button:focus-visible {
 /* Virtual Joystick Styles */
 #joystick-container {
   position: fixed;
-  left: 32px;
-  bottom: 40px;
-  width: 100px;
-  height: 100px;
+  left: 24px;
+  bottom: 32px;
+  width: 80px;
+  height: 80px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -132,11 +132,14 @@ button:focus-visible {
 }
 
 #joystick-base {
-  width: 80px;
-  height: 80px;
-  background: rgba(120, 120, 120, 0.25); /* More visible */
+  width: 64px; /* Reduced from 80px to match refreshSharedPinsBtn */
+  height: 64px; /* Reduced from 80px to match refreshSharedPinsBtn */
+  background-color: rgba(225, 225, 230, 0.25); /* Updated to match refreshSharedPinsBtn */
+  backdrop-filter: blur(12px); /* Increased to match refreshSharedPinsBtn */
+  -webkit-backdrop-filter: blur(12px); /* Increased to match refreshSharedPinsBtn */
+  border: 1px solid rgba(255, 255, 255, 0.25); /* Updated to match refreshSharedPinsBtn */
   border-radius: 50%;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.1); /* Updated to match refreshSharedPinsBtn */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -146,9 +149,9 @@ button:focus-visible {
 }
 
 #joystick-handle {
-  width: 40px;
-  height: 40px;
-  background: rgba(80, 80, 80, 0.55);
+  width: 32px; /* Reduced from 40px proportionally to the base reduction */
+  height: 32px; /* Reduced from 40px proportionally to the base reduction */
+  background: #ffffff; /* Changed from rgba(80, 80, 80, 0.55) to pure white */
   border-radius: 50%;
   position: absolute;
   left: 50%; top: 50%;
@@ -159,7 +162,7 @@ button:focus-visible {
   pointer-events: auto;
 }
 #joystick-base:active #joystick-handle {
-  background: rgba(60,120,255,0.35);
+  background: rgba(255, 255, 255, 0.7); /* Changed to white with reduced opacity when active */
 }
 
 /* Look Area Overlay (right half) */
@@ -233,8 +236,10 @@ button:focus-visible {
   left: 50%;
   bottom: 32px;
   transform: translateX(-50%);
-  background: rgba(40, 40, 45, 0.85);
-  border: none;
+  background-color: rgba(180, 180, 180, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
   width: 68px;
   height: 68px;
   border-radius: 50%;
@@ -245,8 +250,8 @@ button:focus-visible {
   z-index: 100;
   cursor: pointer;
   outline: none;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
-  transition: background-color 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  transition: background-color 0.3s ease, transform 0.2s ease;
 }
 
 #addContentBtn .material-symbols-outlined {
@@ -1099,10 +1104,10 @@ button:focus-visible {
 /* Refresh Button */
 #refreshSharedPinsBtn {
   position: fixed;
-  bottom: 40px;
-  right: 32px;
-  width: 60px;
-  height: 60px;
+  bottom: 40px; /* Updated from 32px to align with joystick-base's visual bottom */
+  right: 31px; /* Adjusted for symmetry with joystick-container */
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1110,19 +1115,24 @@ button:focus-visible {
   z-index: 85;
   padding: 0;
   transition: transform 0.2s ease, background-color 0.2s ease;
-  background-color: rgba(180, 180, 180, 0.2);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  background-color: rgba(225, 225, 230, 0.25);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+#refreshSharedPinsBtn:hover {
+  background-color: rgba(225, 225, 230, 0.35); /* Slightly brighter on hover */
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 #refreshSharedPinsBtn:active {
-  transform: scale(0.9);
+  transform: scale(0.95); /* Slightly less scale down for a more subtle effect */
 }
 
 #refreshSharedPinsBtn .refresh-icon {
-  font-size: 24px;
+  font-size: 30px; /* Increased from 24px to match larger button size */
   color: white;
   transition: transform 0.2s ease;
 }
