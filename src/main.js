@@ -206,8 +206,8 @@ window.addEventListener('DOMContentLoaded', () => {
     0.1,
     1000
   );
-  camera.position.set(3, CAMERA_HEIGHT, 20); // Start at a sensible position inside the room
-  camera.lookAt(0, CAMERA_HEIGHT, 0); // Look forward at eye level
+  camera.position.set(0, CAMERA_HEIGHT, 1); // Start at a sensible position inside the room
+  camera.lookAt(10, CAMERA_HEIGHT, 0); // Look forward at eye level
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setClearColor(0xf0f0f0);
@@ -2160,41 +2160,62 @@ window.addEventListener('DOMContentLoaded', () => {
     console.log('Loading viewpoints...');
     
     try {
-      // Get all metadata records using the new database function
+      // Get all metadata records from IndexedDB
       const metadataRecords = await getAllPinnedPhotoMetadata();
-      console.log(`Found ${metadataRecords.length} total pinned photos`);
+      console.log(`Found ${metadataRecords.length} total pinned photos in IndexedDB`);
       
-      // Add detailed console.table for debugging
-      console.table(
-        metadataRecords.map(r => ({
-          id: r.id,
-          imgId: r.imageId,
-          hasViewpointPosObj: !!r.creatorViewpointPosition,
-          px: r.creatorViewpointPosition?.x,
-          py: r.creatorViewpointPosition?.y,
-          pz: r.creatorViewpointPosition?.z,
-          hasViewpointQuatObj: !!r.creatorViewpointQuaternion,
-          qx: r.creatorViewpointQuaternion?.x,
-          qy: r.creatorViewpointQuaternion?.y,
-          qz: r.creatorViewpointQuaternion?.z,
-          qw: r.creatorViewpointQuaternion?.w,
-          types: {
-            px: typeof r.creatorViewpointPosition?.x,
-            py: typeof r.creatorViewpointPosition?.y,
-            pz: typeof r.creatorViewpointPosition?.z,
-            qx: typeof r.creatorViewpointQuaternion?.x,
-            qy: typeof r.creatorViewpointQuaternion?.y,
-            qz: typeof r.creatorViewpointQuaternion?.z,
-            qw: typeof r.creatorViewpointQuaternion?.w,
-          },
-        }))
-      );
+      // Add detailed console logging for debugging
+      console.log('IndexedDB records before filtering:');
+      metadataRecords.forEach((r, index) => {
+        console.log(`Record ${index}, ID: ${r.id}, imageId: ${r.imageId}`);
+        console.log('  Position object exists:', !!r.creatorViewpointPosition);
+        if (r.creatorViewpointPosition) {
+          console.log('  Position values:', {
+            x: r.creatorViewpointPosition.x,
+            y: r.creatorViewpointPosition.y,
+            z: r.creatorViewpointPosition.z,
+            x_type: typeof r.creatorViewpointPosition.x,
+            y_type: typeof r.creatorViewpointPosition.y,
+            z_type: typeof r.creatorViewpointPosition.z
+          });
+        }
+        console.log('  Quaternion object exists:', !!r.creatorViewpointQuaternion);
+        if (r.creatorViewpointQuaternion) {
+          console.log('  Quaternion values:', {
+            x: r.creatorViewpointQuaternion.x,
+            y: r.creatorViewpointQuaternion.y,
+            z: r.creatorViewpointQuaternion.z,
+            w: r.creatorViewpointQuaternion.w,
+            x_type: typeof r.creatorViewpointQuaternion.x,
+            y_type: typeof r.creatorViewpointQuaternion.y,
+            z_type: typeof r.creatorViewpointQuaternion.z,
+            w_type: typeof r.creatorViewpointQuaternion.w
+          });
+        }
+      });
       
       // Reset the global variable
       allPinnedPhotosData = metadataRecords;
       
+      // Get all shared pins that have creator viewpoints
+      let sharedPins = [];
+      if (currentSectionId) {
+        try {
+          console.log('Fetching shared pins with creator viewpoints for section:', currentSectionId);
+          sharedPins = await getSharedPins(currentSectionId);
+          console.log(`Found ${sharedPins.length} shared pins, checking for creator viewpoints`);
+        } catch (e) {
+          console.error('Error fetching shared pins:', e);
+          sharedPins = [];
+        }
+      }
+      
+      // Combine local and shared pins for viewpoint review
+      const allRecords = [...metadataRecords, ...sharedPins];
+      console.log(`Combined ${metadataRecords.length} local pins and ${sharedPins.length} shared pins`);
+      
       // Filter records to only include those with valid creator viewpoints
-      const validViewpointRecords = metadataRecords.filter(pinData => {
+      const validViewpointRecords = allRecords.filter(pinData => {
         const p = pinData.creatorViewpointPosition;
         const q = pinData.creatorViewpointQuaternion;
 
@@ -2213,39 +2234,98 @@ window.addEventListener('DOMContentLoaded', () => {
           typeof q.z === 'number' && Number.isFinite(q.z) &&
           typeof q.w === 'number' && Number.isFinite(q.w);
 
-        return hasValidPosition && hasValidQuaternion;
+        const isValid = hasValidPosition && hasValidQuaternion;
+        
+        // Log detailed filtering information for each record
+        console.log(`Record ${pinData.id || pinData.imageId} filtering:`, {
+          source: pinData.photoURL ? 'shared' : 'local',
+          hasPosition: !!p,
+          hasQuaternion: !!q,
+          positionValid: hasValidPosition,
+          quaternionValid: hasValidQuaternion,
+          isValid: isValid
+        });
+        
+        return isValid;
       });
       
       console.log(`Found ${validViewpointRecords.length} photos with valid creator viewpoints`);
       
       // Transform the filtered records into the viewablePinsQueue format
       viewablePinsQueue = validViewpointRecords.map(record => {
-        return {
-          imageId: record.imageId,
-          photoPosition: new THREE.Vector3(
-            record.position.x,
-            record.position.y,
-            record.position.z
-          ),
-          photoQuaternion: new THREE.Quaternion(
-            record.orientation.x,
-            record.orientation.y,
-            record.orientation.z,
-            record.orientation.w
-          ),
-          creatorViewpointPosition: new THREE.Vector3(
-            record.creatorViewpointPosition.x,
-            record.creatorViewpointPosition.y,
-            record.creatorViewpointPosition.z
-          ),
-          creatorViewpointQuaternion: new THREE.Quaternion(
-            record.creatorViewpointQuaternion.x,
-            record.creatorViewpointQuaternion.y,
-            record.creatorViewpointQuaternion.z,
-            record.creatorViewpointQuaternion.w
-          ),
-          metadata: record // Store the full metadata for reference
-        };
+        // Determine if this is a local pin or a shared pin
+        const isSharedPin = !!record.photoURL;
+        
+        if (isSharedPin) {
+          // For shared pins
+          return {
+            imageId: record.id, // Use the Firestore document ID
+            isShared: true,
+            photoURL: record.photoURL,
+            photoPosition: new THREE.Vector3(
+              record.position.x,
+              record.position.y,
+              record.position.z
+            ),
+            photoQuaternion: record.pinQuaternion ? 
+              new THREE.Quaternion(
+                record.pinQuaternion.x,
+                record.pinQuaternion.y,
+                record.pinQuaternion.z,
+                record.pinQuaternion.w
+              ) : 
+              (() => {
+                const euler = new THREE.Euler(
+                  record.rotation.x,
+                  record.rotation.y,
+                  record.rotation.z,
+                  'YXZ'
+                );
+                return new THREE.Quaternion().setFromEuler(euler);
+              })(),
+            creatorViewpointPosition: new THREE.Vector3(
+              record.creatorViewpointPosition.x,
+              record.creatorViewpointPosition.y,
+              record.creatorViewpointPosition.z
+            ),
+            creatorViewpointQuaternion: new THREE.Quaternion(
+              record.creatorViewpointQuaternion.x,
+              record.creatorViewpointQuaternion.y,
+              record.creatorViewpointQuaternion.z,
+              record.creatorViewpointQuaternion.w
+            ),
+            metadata: record // Store the full metadata for reference
+          };
+        } else {
+          // For local pins
+          return {
+            imageId: record.imageId,
+            isShared: false,
+            photoPosition: new THREE.Vector3(
+              record.position.x,
+              record.position.y,
+              record.position.z
+            ),
+            photoQuaternion: new THREE.Quaternion(
+              record.orientation.x,
+              record.orientation.y,
+              record.orientation.z,
+              record.orientation.w
+            ),
+            creatorViewpointPosition: new THREE.Vector3(
+              record.creatorViewpointPosition.x,
+              record.creatorViewpointPosition.y,
+              record.creatorViewpointPosition.z
+            ),
+            creatorViewpointQuaternion: new THREE.Quaternion(
+              record.creatorViewpointQuaternion.x,
+              record.creatorViewpointQuaternion.y,
+              record.creatorViewpointQuaternion.z,
+              record.creatorViewpointQuaternion.w
+            ),
+            metadata: record // Store the full metadata for reference
+          };
+        }
       });
       
       console.log('Viewable pins queue prepared:', viewablePinsQueue);
@@ -2286,6 +2366,7 @@ window.addEventListener('DOMContentLoaded', () => {
     
     // Get pin data
     const pinData = viewablePinsQueue[index];
+    console.log('Moving to pin:', pinData);
     
     // Update current viewpoint index
     currentViewpointIndex = index;
@@ -2304,8 +2385,29 @@ window.addEventListener('DOMContentLoaded', () => {
       targetQuaternion = pinData.creatorViewpointQuaternion.clone();
       console.log('Using creator viewpoint for camera transition:', {
         position: targetPosition,
-        quaternion: targetQuaternion
+        quaternion: targetQuaternion,
+        isShared: pinData.isShared
       });
+      
+      // For shared pins, highlight the corresponding pin in the scene
+      if (pinData.isShared) {
+        console.log('Highlighting shared pin:', pinData.imageId);
+        // Find the mesh in the scene that corresponds to this shared pin
+        scene.traverse((object) => {
+          if (object.isMesh && object.userData && object.userData.isSharedPin && 
+              object.userData.id === pinData.imageId) {
+            // Highlight this mesh
+            if (object.material && object.material.emissive) {
+              object.material.emissiveIntensity = 0.5;
+              object.material.emissive.set(0x00ff00); // Green highlight
+              object.userData.isHighlighted = true;
+            }
+          }
+        });
+      } else {
+        // For local pins, use the existing highlight function
+        highlightCurrentPin(pinData.imageId);
+      }
     } else {
       // Fallback: Calculate a reasonable position looking at the photo
       console.log('No creator viewpoint available, using fallback positioning');
@@ -2400,7 +2502,36 @@ window.addEventListener('DOMContentLoaded', () => {
   function updateViewModeUI(index) {
     // If we have UI elements for showing current pin info, update them
     if (currentPinInfoElement) {
-      currentPinInfoElement.textContent = `Viewing Photo ${index + 1} / ${viewablePinsQueue.length}`;
+      // Get the pin data
+      const pinData = viewablePinsQueue[index];
+      
+      // Format timestamp if available
+      let timeStr = '';
+      if (pinData.metadata && pinData.metadata.timestamp) {
+        const date = new Date(pinData.metadata.timestamp);
+        timeStr = `<div class="pin-timestamp">Created: ${date.toLocaleString()}</div>`;
+      } else if (pinData.metadata && pinData.metadata.createdAt) {
+        // Handle Firebase timestamp format
+        const date = pinData.metadata.createdAt instanceof Date ? 
+          pinData.metadata.createdAt : 
+          new Date(pinData.metadata.createdAt);
+        timeStr = `<div class="pin-timestamp">Created: ${date.toLocaleString()}</div>`;
+      }
+      
+      // Determine pin type (local or shared)
+      const pinTypeLabel = pinData.isShared ? 'Shared Pin' : 'Local Pin';
+      const pinTypeClass = pinData.isShared ? 'shared-pin' : 'local-pin';
+      
+      // Set the HTML content with more detailed information
+      currentPinInfoElement.innerHTML = `
+        <div class="pin-info-header">
+          <span class="pin-count">Photo ${index + 1} of ${viewablePinsQueue.length}</span>
+          <span class="pin-type ${pinTypeClass}">${pinTypeLabel}</span>
+        </div>
+        ${timeStr}
+        <div class="pin-info-id">ID: ${pinData.imageId}</div>
+      `;
+      
       currentPinInfoElement.style.display = 'block';
     }
     
@@ -2453,17 +2584,18 @@ window.addEventListener('DOMContentLoaded', () => {
   function exitViewMode() {
     console.log('Exiting viewpoint review mode (attempting)');
     
+    // Immediately reset state variables to stop any ongoing camera transitions
+    isReviewingViewpoints = false;
     isTransitioningCamera = false; // Forcibly stop transition checks/logic
     transitionFrameCounter = 0;
     
-    // Only exit if we're actually in review mode
-    if (!isReviewingViewpoints) {
+    // If we weren't actually in review mode, log and return
+    if (!document.getElementById('viewModeControls')) {
       console.log('Not in viewpoint review mode, ignoring exit request');
       return;
     }
     
-    // Reset flags and state
-    isReviewingViewpoints = false;
+    // Reset index
     currentViewpointIndex = -1;
     
     // Clear any active pin highlights
@@ -2487,9 +2619,21 @@ window.addEventListener('DOMContentLoaded', () => {
     
     // Show the add content button again and reset its state
     if (addContentBtn) {
-      addContentBtn.style.display = 'block';
+      addContentBtn.style.display = 'flex'; // Using flex to ensure proper centering of icons
       addContentBtn.classList.remove('is-close-icon'); // Ensure it's in the default "+" state
     }
+    
+    // Show the refresh button again
+    const refreshBtn = document.getElementById('refreshSharedPinsBtn');
+    if (refreshBtn) refreshBtn.style.display = 'flex';
+    
+    // Show the joystick container again
+    const joystickContainer = document.getElementById('joystick-container');
+    if (joystickContainer) joystickContainer.style.display = 'flex';
+    
+    // Show section selector if it exists
+    const sectionSelector = document.getElementById('sectionSelector');
+    if (sectionSelector) sectionSelector.style.display = 'block';
     
     // Clear viewpoint data
     viewablePinsQueue = [];
@@ -2504,85 +2648,122 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Function to create UI controls for navigating viewpoints
   function createViewModeControls() {
-    // Create container for controls
-    const controlsContainer = document.createElement('div');
-    controlsContainer.id = 'viewModeControls';
-    controlsContainer.style.position = 'fixed';
-    controlsContainer.style.bottom = '30px';
-    controlsContainer.style.left = '50%';
-    controlsContainer.style.transform = 'translateX(-50%)';
-    controlsContainer.style.display = 'flex';
-    controlsContainer.style.gap = '15px';
-    controlsContainer.style.zIndex = '101';
+    // Check if controls already exist
+    let controlsContainer = document.getElementById('viewModeControls');
     
-    // Previous button
-    const prevButton = document.createElement('button');
-    prevButton.id = 'prevViewpointBtn';
-    prevButton.textContent = 'Previous';
-    prevButton.style.padding = '10px 20px';
-    prevButton.style.backgroundColor = 'rgba(40, 40, 45, 0.85)';
-    prevButton.style.color = 'white';
-    prevButton.style.border = 'none';
-    prevButton.style.borderRadius = '8px';
-    prevButton.style.fontSize = '16px';
-    prevButton.style.cursor = 'pointer';
-    prevButton.style.boxShadow = '0 2px 5px rgba(0, 0, 0, 0.2)';
+    // If controls container doesn't exist, create it
+    if (!controlsContainer) {
+      controlsContainer = document.createElement('div');
+      controlsContainer.id = 'viewModeControls';
+      controlsContainer.style.position = 'fixed';
+      controlsContainer.style.bottom = '30px';
+      controlsContainer.style.left = '50%';
+      controlsContainer.style.transform = 'translateX(-50%)';
+      controlsContainer.style.display = 'flex';
+      controlsContainer.style.gap = '15px';
+      controlsContainer.style.zIndex = '101';
+      
+      // Add container to document
+      document.body.appendChild(controlsContainer);
+    } else {
+      // Clear existing content if container already exists
+      controlsContainer.innerHTML = '';
+    }
     
-    // Exit button
-    const exitButton = document.createElement('button');
-    exitButton.id = 'exitViewModeBtn';
-    exitButton.textContent = 'Exit View Mode';
-    exitButton.style.padding = '10px 20px';
-    exitButton.style.backgroundColor = 'rgba(220, 53, 69, 0.85)';
-    exitButton.style.color = 'white';
-    exitButton.style.border = 'none';
-    exitButton.style.borderRadius = '8px';
-    exitButton.style.fontSize = '16px';
-    exitButton.style.cursor = 'pointer';
-    exitButton.style.boxShadow = '0 2px 5px rgba(0, 0, 0, 0.2)';
+    // Check for previous button
+    let prevButton = document.getElementById('prevViewpointBtn');
+    if (!prevButton) {
+      prevButton = document.createElement('button');
+      prevButton.id = 'prevViewpointBtn';
+      prevButton.textContent = 'Previous';
+      prevButton.style.padding = '10px 20px';
+      prevButton.style.backgroundColor = 'rgba(40, 40, 45, 0.85)';
+      prevButton.style.color = 'white';
+      prevButton.style.border = 'none';
+      prevButton.style.borderRadius = '8px';
+      prevButton.style.fontSize = '16px';
+      prevButton.style.cursor = 'pointer';
+      prevButton.style.boxShadow = '0 2px 5px rgba(0, 0, 0, 0.2)';
+      
+      // Add to container
+      controlsContainer.appendChild(prevButton);
+    }
     
-    // Next button
-    const nextButton = document.createElement('button');
-    nextButton.id = 'nextViewpointBtn';
-    nextButton.textContent = 'Next';
-    nextButton.style.padding = '10px 20px';
-    nextButton.style.backgroundColor = 'rgba(40, 40, 45, 0.85)';
-    nextButton.style.color = 'white';
-    nextButton.style.border = 'none';
-    nextButton.style.borderRadius = '8px';
-    nextButton.style.fontSize = '16px';
-    nextButton.style.cursor = 'pointer';
-    nextButton.style.boxShadow = '0 2px 5px rgba(0, 0, 0, 0.2)';
+    // Check for exit button
+    let exitButton = document.getElementById('exitViewModeBtn');
+    if (!exitButton) {
+      exitButton = document.createElement('button');
+      exitButton.id = 'exitViewModeBtn';
+      exitButton.textContent = 'Exit View Mode';
+      exitButton.style.padding = '10px 20px';
+      exitButton.style.backgroundColor = 'rgba(220, 53, 69, 0.85)';
+      exitButton.style.color = 'white';
+      exitButton.style.border = 'none';
+      exitButton.style.borderRadius = '8px';
+      exitButton.style.fontSize = '16px';
+      exitButton.style.cursor = 'pointer';
+      exitButton.style.boxShadow = '0 2px 5px rgba(0, 0, 0, 0.2)';
+      
+      // Add to container
+      controlsContainer.appendChild(exitButton);
+    }
     
-    // Add buttons to container
-    controlsContainer.appendChild(prevButton);
-    controlsContainer.appendChild(exitButton);
-    controlsContainer.appendChild(nextButton);
+    // Check for next button
+    let nextButton = document.getElementById('nextViewpointBtn');
+    if (!nextButton) {
+      nextButton = document.createElement('button');
+      nextButton.id = 'nextViewpointBtn';
+      nextButton.textContent = 'Next';
+      nextButton.style.padding = '10px 20px';
+      nextButton.style.backgroundColor = 'rgba(40, 40, 45, 0.85)';
+      nextButton.style.color = 'white';
+      nextButton.style.border = 'none';
+      nextButton.style.borderRadius = '8px';
+      nextButton.style.fontSize = '16px';
+      nextButton.style.cursor = 'pointer';
+      nextButton.style.boxShadow = '0 2px 5px rgba(0, 0, 0, 0.2)';
+      
+      // Add to container
+      controlsContainer.appendChild(nextButton);
+    }
     
-    // Add keyboard hint
-    const keyboardHint = document.createElement('div');
-    keyboardHint.id = 'keyboardHint';
-    keyboardHint.textContent = 'Keyboard: ← → arrows or ESC to exit';
-    keyboardHint.style.position = 'fixed';
-    keyboardHint.style.bottom = '120px';
-    keyboardHint.style.left = '50%';
-    keyboardHint.style.transform = 'translateX(-50%)';
-    keyboardHint.style.fontSize = '14px';
-    keyboardHint.style.color = 'rgba(255, 255, 255, 0.7)';
-    keyboardHint.style.padding = '5px 10px';
-    keyboardHint.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
-    keyboardHint.style.borderRadius = '5px';
-    keyboardHint.style.zIndex = '101';
-    document.body.appendChild(keyboardHint);
+    // Check for keyboard hint
+    let keyboardHint = document.getElementById('keyboardHint');
+    if (!keyboardHint) {
+      keyboardHint = document.createElement('div');
+      keyboardHint.id = 'keyboardHint';
+      keyboardHint.textContent = 'Keyboard: ← → arrows or ESC to exit';
+      keyboardHint.style.position = 'fixed';
+      keyboardHint.style.bottom = '120px';
+      keyboardHint.style.left = '50%';
+      keyboardHint.style.transform = 'translateX(-50%)';
+      keyboardHint.style.fontSize = '14px';
+      keyboardHint.style.color = 'rgba(255, 255, 255, 0.7)';
+      keyboardHint.style.padding = '5px 10px';
+      keyboardHint.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+      keyboardHint.style.borderRadius = '5px';
+      keyboardHint.style.zIndex = '101';
+      document.body.appendChild(keyboardHint);
+    }
     
-    // Add container to document
-    document.body.appendChild(controlsContainer);
+    // Remove any existing event listeners before adding new ones
+    // This is a simplified approach - in a more complex app, you might use named functions
+    prevButton.replaceWith(prevButton.cloneNode(true));
+    exitButton.replaceWith(exitButton.cloneNode(true));
+    nextButton.replaceWith(nextButton.cloneNode(true));
     
+    // Re-select the buttons after replacing them
+    prevButton = document.getElementById('prevViewpointBtn');
+    exitButton = document.getElementById('exitViewModeBtn');
+    nextButton = document.getElementById('nextViewpointBtn');
     
-    // Add event listeners
+    // Add event listeners to the fresh elements
     prevButton.addEventListener('click', navigateToPreviousPin);
     nextButton.addEventListener('click', navigateToNextPin);
     exitButton.addEventListener('click', exitViewMode);
+    
+    // Remove existing keyboard listener if it exists
+    document.removeEventListener('keydown', handleViewModeKeyDown);
     
     // Add keyboard navigation
     document.addEventListener('keydown', handleViewModeKeyDown);
@@ -2593,15 +2774,32 @@ window.addEventListener('DOMContentLoaded', () => {
   
   // Function to remove view mode controls
   function removeViewModeControls() {
+    // Remove the controls container
     const controlsContainer = document.getElementById('viewModeControls');
     if (controlsContainer) {
       document.body.removeChild(controlsContainer);
     }
     
+    // Remove individual buttons in case they exist outside the container
+    const prevButton = document.getElementById('prevViewpointBtn');
+    if (prevButton && prevButton.parentNode) {
+      prevButton.parentNode.removeChild(prevButton);
+    }
+    
+    const exitButton = document.getElementById('exitViewModeBtn');
+    if (exitButton && exitButton.parentNode) {
+      exitButton.parentNode.removeChild(exitButton);
+    }
+    
+    const nextButton = document.getElementById('nextViewpointBtn');
+    if (nextButton && nextButton.parentNode) {
+      nextButton.parentNode.removeChild(nextButton);
+    }
+    
     // Also remove keyboard hint
     const keyboardHint = document.getElementById('keyboardHint');
-    if (keyboardHint) {
-      document.body.removeChild(keyboardHint);
+    if (keyboardHint && keyboardHint.parentNode) {
+      keyboardHint.parentNode.removeChild(keyboardHint);
     }
     
     // Remove keyboard navigation listener
@@ -2714,10 +2912,23 @@ window.addEventListener('DOMContentLoaded', () => {
       // Create navigation controls
       createViewModeControls();
       
+      // Hide UI elements
       // Hide the main add content button while in view mode
       if (addContentBtn) {
         addContentBtn.style.display = 'none';
       }
+      
+      // Hide refresh shared pins button
+      const refreshBtn = document.getElementById('refreshSharedPinsBtn');
+      if (refreshBtn) refreshBtn.style.display = 'none';
+      
+      // Hide joystick container
+      const joystickContainer = document.getElementById('joystick-container');
+      if (joystickContainer) joystickContainer.style.display = 'none';
+      
+      // Make sure any other UI elements that might interfere are hidden
+      const sectionSelector = document.getElementById('sectionSelector');
+      if (sectionSelector) sectionSelector.style.display = 'none';
       
       // Load viewpoint data and begin camera transitions
       loadAndPrepareViewpoints();
@@ -2878,8 +3089,8 @@ window.addEventListener('DOMContentLoaded', () => {
     
     try {
       // Skip if missing required data
-      if (!pin.position || !pin.rotation) {
-        console.error('Pin is missing position or rotation data:', pin);
+      if (!pin.position || (!pin.rotation && !pin.pinQuaternion)) {
+        console.error('Pin is missing position or orientation data:', pin);
         return null;
       }
       
@@ -2922,12 +3133,26 @@ window.addEventListener('DOMContentLoaded', () => {
         pin.position.z
       );
       
-      // Set rotation
-      mesh.rotation.set(
-        pin.rotation.x,
-        pin.rotation.y,
-        pin.rotation.z
-      );
+      // Set orientation - prefer quaternion if available
+      if (pin.pinQuaternion) {
+        console.log(`Using pinQuaternion for pin ${pin.id}:`, pin.pinQuaternion);
+        mesh.quaternion.set(
+          pin.pinQuaternion.x,
+          pin.pinQuaternion.y,
+          pin.pinQuaternion.z,
+          pin.pinQuaternion.w
+        );
+      } else if (pin.rotation) {
+        console.log(`Using Euler rotation for pin ${pin.id}:`, pin.rotation);
+        // Use YXZ order to match the saving order
+        const euler = new THREE.Euler(
+          pin.rotation.x || 0,
+          pin.rotation.y || 0,
+          pin.rotation.z || 0,
+          'YXZ'
+        );
+        mesh.quaternion.setFromEuler(euler);
+      }
       
       // Store pin data in mesh userData
       mesh.userData = {
@@ -2938,9 +3163,10 @@ window.addEventListener('DOMContentLoaded', () => {
         createdAt: pin.createdAt
       };
       
-      // Add creator viewpoint if available
-      if (pin.creatorViewpoint) {
-        mesh.userData.creatorViewpoint = pin.creatorViewpoint;
+      // Add creator viewpoint data if available
+      if (pin.creatorViewpointPosition && pin.creatorViewpointQuaternion) {
+        mesh.userData.creatorViewpointPosition = pin.creatorViewpointPosition;
+        mesh.userData.creatorViewpointQuaternion = pin.creatorViewpointQuaternion;
       }
       
       // Add to scene

@@ -3,6 +3,7 @@ import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, doc, setDoc, getDoc, getDocs, query, where, deleteDoc, addDoc, serverTimestamp, orderBy } from 'firebase/firestore';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { Euler, Quaternion } from 'three'; // Import THREE.js components for viewpoint conversion
 
 // Replace with your Firebase project configuration
 // You'll need to replace these values with the ones from your Firebase console
@@ -14,6 +15,110 @@ const firebaseConfig = {
   messagingSenderId: "69872249273",
   appId: "1:69872249273:web:100745c538a49b2046ae68"
 };
+
+/**
+ * Helper function to convert a value to a Number or return undefined if not a finite number
+ * @param {*} val - The value to convert
+ * @returns {Number|undefined} The converted number or undefined
+ */
+function numOrUndef(val) {
+  if (val === undefined || val === null) return undefined;
+  const n = Number(val);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * Helper function to convert Euler angles to Quaternion
+ * @param {Object} rot - Rotation object with x, y, z properties (Euler angles)
+ * @returns {Object} Quaternion object with x, y, z, w properties
+ */
+function eulerToQuaternion(rot = {}) {
+  const e = new Euler(
+    numOrUndef(rot.x) || 0, 
+    numOrUndef(rot.y) || 0, 
+    numOrUndef(rot.z) || 0, 
+    'YXZ' // Use YXZ order for consistent conversion
+  );
+  const q = new Quaternion().setFromEuler(e);
+  return { 
+    x: q.x, 
+    y: q.y, 
+    z: q.z, 
+    w: q.w 
+  };
+}
+
+/**
+ * Helper function to extract and validate x, y, z components from a source object
+ * @param {Object} src - The source object
+ * @param {string} base - The base key prefix
+ * @returns {Object|undefined} An object with x, y, z properties or undefined
+ */
+function pickXYZ(src, base) {
+  if (!src) return undefined;
+  
+  // Check for flat structure (e.g., base_x, base_y, base_z)
+  if (src[`${base}_x`] !== undefined) {
+    const x = numOrUndef(src[`${base}_x`]);
+    const y = numOrUndef(src[`${base}_y`]);
+    const z = numOrUndef(src[`${base}_z`]);
+    
+    if (x !== undefined && y !== undefined && z !== undefined) {
+      return { x, y, z };
+    }
+    return undefined;
+  }
+  
+  // Check for nested structure (e.g., base.x, base.y, base.z)
+  if (src[base] && typeof src[base] === 'object') {
+    const x = numOrUndef(src[base].x);
+    const y = numOrUndef(src[base].y);
+    const z = numOrUndef(src[base].z);
+    
+    if (x !== undefined && y !== undefined && z !== undefined) {
+      return { x, y, z };
+    }
+  }
+  
+  return undefined;
+}
+
+/**
+ * Helper function to extract and validate x, y, z, w components from a source object
+ * @param {Object} src - The source object
+ * @param {string} base - The base key prefix
+ * @returns {Object|undefined} An object with x, y, z, w properties or undefined
+ */
+function pickXYZW(src, base) {
+  if (!src) return undefined;
+  
+  // Check for flat structure (e.g., base_x, base_y, base_z, base_w)
+  if (src[`${base}_x`] !== undefined) {
+    const x = numOrUndef(src[`${base}_x`]);
+    const y = numOrUndef(src[`${base}_y`]);
+    const z = numOrUndef(src[`${base}_z`]);
+    const w = numOrUndef(src[`${base}_w`]);
+    
+    if (x !== undefined && y !== undefined && z !== undefined && w !== undefined) {
+      return { x, y, z, w };
+    }
+    return undefined;
+  }
+  
+  // Check for nested structure (e.g., base.x, base.y, base.z, base.w)
+  if (src[base] && typeof src[base] === 'object') {
+    const x = numOrUndef(src[base].x);
+    const y = numOrUndef(src[base].y);
+    const z = numOrUndef(src[base].z);
+    const w = numOrUndef(src[base].w);
+    
+    if (x !== undefined && y !== undefined && z !== undefined && w !== undefined) {
+      return { x, y, z, w };
+    }
+  }
+  
+  return undefined;
+}
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
@@ -91,18 +196,81 @@ export async function getSharedPins(sectionId) {
     // Process the query results
     const pins = [];
     querySnapshot.forEach((doc) => {
-      const pinData = doc.data();
+      // Get raw data from Firestore
+      const rawData = doc.data();
+      console.log('[Firebase] Raw Shared Pin Data:', JSON.parse(JSON.stringify(rawData)));
+      
+      // Create processed pin object with document ID
+      const processedPin = {
+        id: doc.id,
+        ...rawData
+      };
       
       // Convert Firestore timestamp to JavaScript Date if it exists
-      if (pinData.createdAt) {
-        pinData.createdAt = pinData.createdAt.toDate();
+      if (processedPin.createdAt) {
+        processedPin.createdAt = processedPin.createdAt.toDate();
       }
       
-      // Add the document ID to the pin data
-      pins.push({
-        id: doc.id,
-        ...pinData
-      });
+      // Process creator viewpoint data for compatibility with main.js
+      if (processedPin.creatorViewpoint) {
+        // Extract and validate position data
+        if (processedPin.creatorViewpoint.position) {
+          const pos = processedPin.creatorViewpoint.position;
+          processedPin.creatorViewpointPosition = {
+            x: numOrUndef(pos.x),
+            y: numOrUndef(pos.y),
+            z: numOrUndef(pos.z)
+          };
+          
+          // If any component is undefined, make the whole position undefined
+          if (processedPin.creatorViewpointPosition.x === undefined || 
+              processedPin.creatorViewpointPosition.y === undefined || 
+              processedPin.creatorViewpointPosition.z === undefined) {
+            processedPin.creatorViewpointPosition = undefined;
+          }
+        }
+        
+        // Process quaternion data - handle both rotation (Euler) and direct quaternion
+        if (processedPin.creatorViewpoint.rotation) {
+          // Convert Euler rotation to quaternion
+          processedPin.creatorViewpointQuaternion = eulerToQuaternion(processedPin.creatorViewpoint.rotation);
+        } else if (processedPin.creatorViewpoint.quaternion) {
+          // Use existing quaternion data if available
+          const quat = processedPin.creatorViewpoint.quaternion;
+          processedPin.creatorViewpointQuaternion = {
+            x: numOrUndef(quat.x),
+            y: numOrUndef(quat.y),
+            z: numOrUndef(quat.z),
+            w: numOrUndef(quat.w)
+          };
+          
+          // If any component is undefined, make the whole quaternion undefined
+          if (Object.values(processedPin.creatorViewpointQuaternion).some(v => v === undefined)) {
+            processedPin.creatorViewpointQuaternion = undefined;
+          }
+        }
+        
+        // Remove the nested creatorViewpoint to prevent confusion in main.js
+        delete processedPin.creatorViewpoint;
+      }
+      
+      // Process pin orientation - add pinQuaternion if it exists
+      if (processedPin.pinQuaternion) {
+        // Ensure all components are valid numbers
+        const q = processedPin.pinQuaternion;
+        if (numOrUndef(q.x) !== undefined && 
+            numOrUndef(q.y) !== undefined && 
+            numOrUndef(q.z) !== undefined && 
+            numOrUndef(q.w) !== undefined) {
+          // Keep the pinQuaternion as is, it's already valid
+        } else {
+          // Invalid quaternion, delete it
+          delete processedPin.pinQuaternion;
+        }
+      }
+      
+      console.log('[Firebase] Processed Shared Pin for main.js:', JSON.parse(JSON.stringify(processedPin)));
+      pins.push(processedPin);
     });
     
     console.log(`[Firebase] Found ${pins.length} shared pins for section: ${sectionId}`);
@@ -178,6 +346,7 @@ export function initFirebase() {
  * @param {string} pinData.photoURL - URL to the photo
  * @param {Object} pinData.position - Position object with x, y, z coordinates
  * @param {Object} pinData.rotation - Rotation object with x, y, z Euler angles
+ * @param {Object} pinData.transform - Transform data including quaternion
  * @param {string} pinData.sectionId - ID of the section where the pin is placed
  * @returns {Promise<string>} A promise that resolves with the ID of the newly created document
  */
@@ -199,6 +368,39 @@ export async function addSharedPin(pinData) {
       userId: userId,          // Add the user ID
       createdAt: serverTimestamp() // Add server timestamp
     };
+    
+    // Store quaternion directly if available in transform data
+    if (pinData.transform && pinData.transform.quaternion) {
+      sharedPinDoc.pinQuaternion = {
+        x: numOrUndef(pinData.transform.quaternion.x),
+        y: numOrUndef(pinData.transform.quaternion.y),
+        z: numOrUndef(pinData.transform.quaternion.z),
+        w: numOrUndef(pinData.transform.quaternion.w)
+      };
+      console.log('[Firebase] Storing pin quaternion:', sharedPinDoc.pinQuaternion);
+    }
+    
+    // If creatorViewpoint exists with rotation (Euler), also store as quaternion
+    if (pinData.creatorViewpoint && pinData.creatorViewpoint.rotation) {
+      // Convert Euler to quaternion and store as flat fields
+      const vpQuat = eulerToQuaternion(pinData.creatorViewpoint.rotation);
+      
+      // Store as flat fields for better compatibility
+      sharedPinDoc.creatorViewpointQuaternion_x = numOrUndef(vpQuat.x);
+      sharedPinDoc.creatorViewpointQuaternion_y = numOrUndef(vpQuat.y);
+      sharedPinDoc.creatorViewpointQuaternion_z = numOrUndef(vpQuat.z);
+      sharedPinDoc.creatorViewpointQuaternion_w = numOrUndef(vpQuat.w);
+      
+      // Store position as flat fields if it exists
+      if (pinData.creatorViewpoint.position) {
+        const pos = pinData.creatorViewpoint.position;
+        sharedPinDoc.creatorViewpointPosition_x = numOrUndef(pos.x);
+        sharedPinDoc.creatorViewpointPosition_y = numOrUndef(pos.y);
+        sharedPinDoc.creatorViewpointPosition_z = numOrUndef(pos.z);
+      }
+      
+      console.log('[Firebase] Storing creator viewpoint data in flat format');
+    }
     
     // Add the document to the sharedPins collection
     const docRef = await addDoc(collection(db, SHARED_PINS_COLLECTION), sharedPinDoc);

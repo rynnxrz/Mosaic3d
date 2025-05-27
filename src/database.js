@@ -12,6 +12,54 @@ let db = null;
 let useFirebase = true; // Set to true to use Firebase, false to use only IndexedDB
 
 /**
+ * Helper function to convert a value to a Number or return undefined if not a finite number
+ * @param {*} val - The value to convert
+ * @returns {Number|undefined} The converted number or undefined
+ */
+function numOrUndef(val) {
+  if (val === undefined || val === null) return undefined;
+  const n = Number(val);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * Helper function to extract and validate x, y, z components from a source object
+ * @param {Object} src - The source object
+ * @param {string} base - The base key prefix
+ * @returns {Object|undefined} An object with x, y, z properties or undefined
+ */
+function pickXYZ(src, base) {
+  const x = src[`${base}_x`] !== undefined ? Number(src[`${base}_x`]) : undefined;
+  const y = src[`${base}_y`] !== undefined ? Number(src[`${base}_y`]) : undefined;
+  const z = src[`${base}_z`] !== undefined ? Number(src[`${base}_z`]) : undefined;
+  
+  if (x !== undefined && y !== undefined && z !== undefined && 
+      Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+    return { x, y, z };
+  }
+  return undefined;
+}
+
+/**
+ * Helper function to extract and validate x, y, z, w components from a source object
+ * @param {Object} src - The source object
+ * @param {string} base - The base key prefix
+ * @returns {Object|undefined} An object with x, y, z, w properties or undefined
+ */
+function pickXYZW(src, base) {
+  const x = src[`${base}_x`] !== undefined ? Number(src[`${base}_x`]) : undefined;
+  const y = src[`${base}_y`] !== undefined ? Number(src[`${base}_y`]) : undefined;
+  const z = src[`${base}_z`] !== undefined ? Number(src[`${base}_z`]) : undefined;
+  const w = src[`${base}_w`] !== undefined ? Number(src[`${base}_w`]) : undefined;
+  
+  if (x !== undefined && y !== undefined && z !== undefined && w !== undefined && 
+      [x, y, z, w].every(Number.isFinite)) {
+    return { x, y, z, w };
+  }
+  return undefined;
+}
+
+/**
  * Get the database instance, opening it if necessary
  * @returns {Promise} A promise that resolves with the database instance
  */
@@ -253,36 +301,40 @@ export function savePinnedItem(imageBlob, imageId, transformData) {
           aspectRatio: transformData.aspectRatio
         };
 
+        // Process creator viewpoint data using numOrUndef helper
         const cv = transformData.creatorViewpoint;
         if (cv && cv.position) {
-          metadataRecord.creatorViewpointPosition_x = Number(cv.position.x);
-          metadataRecord.creatorViewpointPosition_y = Number(cv.position.y);
-          metadataRecord.creatorViewpointPosition_z = Number(cv.position.z);
+          // Process position components
+          metadataRecord.creatorViewpointPosition_x = numOrUndef(cv.position.x);
+          metadataRecord.creatorViewpointPosition_y = numOrUndef(cv.position.y);
+          metadataRecord.creatorViewpointPosition_z = numOrUndef(cv.position.z);
 
-          if (cv.quaternion) { // cv.quaternion is the THREE.Quaternion object from main.js
-            const q = cv.quaternion; // Alias for clarity
-            const qx = Number(q.x);
-            const qy = Number(q.y);
-            const qz = Number(q.z);
-            const qw = Number(q.w);
-
-            metadataRecord.creatorViewpointQuaternion_x = Number.isFinite(qx) ? qx : null;
-            metadataRecord.creatorViewpointQuaternion_y = Number.isFinite(qy) ? qy : null;
-            metadataRecord.creatorViewpointQuaternion_z = Number.isFinite(qz) ? qz : null;
-            metadataRecord.creatorViewpointQuaternion_w = Number.isFinite(qw) ? qw : null; // CRITICAL: Ensure 'w' is handled
+          // Process quaternion components if available
+          if (cv.quaternion) {
+            metadataRecord.creatorViewpointQuaternion_x = numOrUndef(cv.quaternion.x);
+            metadataRecord.creatorViewpointQuaternion_y = numOrUndef(cv.quaternion.y);
+            metadataRecord.creatorViewpointQuaternion_z = numOrUndef(cv.quaternion.z);
+            metadataRecord.creatorViewpointQuaternion_w = numOrUndef(cv.quaternion.w);
           } else {
-            // If cv.quaternion is null or undefined, explicitly set all components to null in the DB record
-            metadataRecord.creatorViewpointQuaternion_x = null;
-            metadataRecord.creatorViewpointQuaternion_y = null;
-            metadataRecord.creatorViewpointQuaternion_z = null;
-            metadataRecord.creatorViewpointQuaternion_w = null;
+            // Set quaternion components to undefined if not available
+            metadataRecord.creatorViewpointQuaternion_x = undefined;
+            metadataRecord.creatorViewpointQuaternion_y = undefined;
+            metadataRecord.creatorViewpointQuaternion_z = undefined;
+            metadataRecord.creatorViewpointQuaternion_w = undefined;
           }
         } else {
-          metadataRecord.creatorViewpointPosition_x = null;
-          metadataRecord.creatorViewpointPosition_y = null;
-          metadataRecord.creatorViewpointPosition_z = null;
-          ['x', 'y', 'z', 'w'].forEach(k => { metadataRecord[`creatorViewpointQuaternion_${k}`] = null; });
+          // Set all viewpoint components to undefined if not available
+          metadataRecord.creatorViewpointPosition_x = undefined;
+          metadataRecord.creatorViewpointPosition_y = undefined;
+          metadataRecord.creatorViewpointPosition_z = undefined;
+          metadataRecord.creatorViewpointQuaternion_x = undefined;
+          metadataRecord.creatorViewpointQuaternion_y = undefined;
+          metadataRecord.creatorViewpointQuaternion_z = undefined;
+          metadataRecord.creatorViewpointQuaternion_w = undefined;
         }
+
+        // Log the metadata record before saving
+        console.log('[DB] savePinnedItem: Attempting to write metadataRecord:', JSON.parse(JSON.stringify(metadataRecord)));
        
         const metadataRequest = metadataStore.add(metadataRecord); // Use add for auto-incrementing key
         metadataRequest.onerror = (event) => {
@@ -603,29 +655,20 @@ export function getAllPinnedPhotoMetadata() { // Changed to non-async, returns P
       console.log(`[DB] getAllPinnedPhotoMetadata: Retrieved ${allRawRecords.length} raw records.`);
 
       const formattedRecords = allRawRecords.map(rec => {
-        const out = { ...rec };
-
-        const px = Number(rec.creatorViewpointPosition_x);
-        const py = Number(rec.creatorViewpointPosition_y);
-        const pz = Number(rec.creatorViewpointPosition_z);
-        if ([px, py, pz].every(Number.isFinite)) {
-          out.creatorViewpointPosition = { x: px, y: py, z: pz };
-        } else {
-          out.creatorViewpointPosition = null;
-        }
-
-        const qx_db = Number(rec.creatorViewpointQuaternion_x);
-        const qy_db = Number(rec.creatorViewpointQuaternion_y);
-        const qz_db = Number(rec.creatorViewpointQuaternion_z);
-        const qw_db = Number(rec.creatorViewpointQuaternion_w);
-
-        if ([qx_db, qy_db, qz_db, qw_db].every(Number.isFinite)) {
-          out.creatorViewpointQuaternion = { x: qx_db, y: qy_db, z: qz_db, w: qw_db };
-        } else {
-          out.creatorViewpointQuaternion = null; // If any component is not a finite number, set the whole object to null
-        }
+        // Log the raw record from the database
+        console.log('[DB] getAllPinnedPhotoMetadata: Raw record from DB:', JSON.parse(JSON.stringify(rec)));
         
-        // Clean up flat fields from the output object (optional but good practice)
+        // Clone the record to avoid modifying the original
+        const out = { ...rec };
+        
+        // Use helper functions to reconstruct nested objects
+        out.creatorViewpointPosition = pickXYZ(rec, 'creatorViewpointPosition');
+        out.creatorViewpointQuaternion = pickXYZW(rec, 'creatorViewpointQuaternion');
+        
+        // Log the reconstructed record
+        console.log('[DB] getAllPinnedPhotoMetadata: Hydrated record:', JSON.parse(JSON.stringify(out)));
+        
+        // Clean up flat fields from the output object
         delete out.creatorViewpointPosition_x;
         delete out.creatorViewpointPosition_y;
         delete out.creatorViewpointPosition_z;
@@ -636,7 +679,8 @@ export function getAllPinnedPhotoMetadata() { // Changed to non-async, returns P
 
         return out;
       });
-      console.info('[DB] getAllPinnedPhotoMetadata: Processed records:', JSON.parse(JSON.stringify(formattedRecords)));
+      
+      console.info('[DB] getAllPinnedPhotoMetadata: Processed records:', formattedRecords.length);
       resolve(formattedRecords);
     };
   });
