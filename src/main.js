@@ -2461,9 +2461,14 @@ window.addEventListener('DOMContentLoaded', () => {
       });
       document.dispatchEvent(event);
     } else {
-      // Normal case - start the transition
-      isTransitioningCamera = true;
+      // Always reset the transition frame counter when setting a new target,
+      // even if we're already in a transition
       transitionFrameCounter = 0;
+      
+      // Set or maintain the transitioning flag
+      isTransitioningCamera = true;
+      
+      console.log('Starting/updating camera transition to new target');
     }
     
     // Highlight the current pin's mesh if it exists in the scene
@@ -2540,40 +2545,30 @@ window.addEventListener('DOMContentLoaded', () => {
     const nextButton = document.getElementById('nextViewpointBtn');
     
     if (prevButton && nextButton) {
-      // First pin - disable previous button
-      if (index <= 0) {
+      // For circular navigation, both buttons are always enabled if there's more than one pin
+      if (viewablePinsQueue.length <= 1) {
+        // Disable both buttons if there's only one pin or none
         prevButton.disabled = true;
         prevButton.style.opacity = '0.5';
         prevButton.style.cursor = 'not-allowed';
-      } else {
-        prevButton.disabled = false;
-        prevButton.style.opacity = '1';
-        prevButton.style.cursor = 'pointer';
-      }
-      
-      // Last pin - disable next button
-      if (index >= viewablePinsQueue.length - 1) {
+        
         nextButton.disabled = true;
         nextButton.style.opacity = '0.5';
         nextButton.style.cursor = 'not-allowed';
       } else {
+        // Enable both buttons for circular navigation
+        prevButton.disabled = false;
+        prevButton.style.opacity = '1';
+        prevButton.style.cursor = 'pointer';
+        
         nextButton.disabled = false;
         nextButton.style.opacity = '1';
         nextButton.style.cursor = 'pointer';
       }
       
-      // Add visual indicator to show current button states
-      if (index <= 0) {
-        prevButton.innerHTML = '&#x25C0; First';
-      } else {
-        prevButton.innerHTML = '&#x25C0; Previous';
-      }
-      
-      if (index >= viewablePinsQueue.length - 1) {
-        nextButton.innerHTML = 'Last &#x25B6;';
-      } else {
-        nextButton.innerHTML = 'Next &#x25B6;';
-      }
+      // Update button text - no need for "First" or "Last" indicators with circular navigation
+      prevButton.innerHTML = '&#x25C0; Previous';
+      nextButton.innerHTML = 'Next &#x25B6;';
     }
     
     // Log the current pin info
@@ -2835,46 +2830,42 @@ window.addEventListener('DOMContentLoaded', () => {
   
   // Function to navigate to the next pin
   function navigateToNextPin() {
-    if (isTransitioningCamera) {
-      console.log('Camera is already transitioning, ignoring navigation request');
-      return;
+    // Remove the isTransitioningCamera check to allow retargeting during transitions
+    
+    let nextIndex;
+    
+    // Implement circular navigation
+    if (currentViewpointIndex >= viewablePinsQueue.length - 1) {
+      // If at the last pin, circle back to the first pin
+      nextIndex = 0;
+      console.log('Circling back to first viewpoint');
+    } else {
+      // Otherwise, move to the next pin
+      nextIndex = currentViewpointIndex + 1;
     }
     
-    if (currentViewpointIndex < viewablePinsQueue.length - 1) {
-      moveToPhotoView(currentViewpointIndex + 1);
-    } else {
-      console.log('Already at the last viewpoint');
-      // Visual feedback that we're at the last pin
-      const nextButton = document.getElementById('nextViewpointBtn');
-      if (nextButton) {
-        nextButton.classList.add('button-flash');
-        setTimeout(() => {
-          nextButton.classList.remove('button-flash');
-        }, 300);
-      }
-    }
+    // Move to the next photo view
+    moveToPhotoView(nextIndex);
   }
   
   // Function to navigate to the previous pin
   function navigateToPreviousPin() {
-    if (isTransitioningCamera) {
-      console.log('Camera is already transitioning, ignoring navigation request');
-      return;
+    // Remove the isTransitioningCamera check to allow retargeting during transitions
+    
+    let prevIndex;
+    
+    // Implement circular navigation
+    if (currentViewpointIndex <= 0) {
+      // If at the first pin, circle back to the last pin
+      prevIndex = viewablePinsQueue.length - 1;
+      console.log('Circling back to last viewpoint');
+    } else {
+      // Otherwise, move to the previous pin
+      prevIndex = currentViewpointIndex - 1;
     }
     
-    if (currentViewpointIndex > 0) {
-      moveToPhotoView(currentViewpointIndex - 1);
-    } else {
-      console.log('Already at the first viewpoint');
-      // Visual feedback that we're at the first pin
-      const prevButton = document.getElementById('prevViewpointBtn');
-      if (prevButton) {
-        prevButton.classList.add('button-flash');
-        setTimeout(() => {
-          prevButton.classList.remove('button-flash');
-        }, 300);
-      }
-    }
+    // Move to the previous photo view
+    moveToPhotoView(prevIndex);
   }
 
   // Add event listener for review creator viewpoints button
